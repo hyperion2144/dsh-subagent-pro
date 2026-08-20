@@ -1,0 +1,40 @@
+# Node / pnpm / build artifacts
+node_modules/
+*.log
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Build output (lib/ is shipped, but allow fresh build on each commit)
+# Keep lib/ in VCS so the standalone repo works without a build step,
+# matching @leetoners/dsh-ui-subagent-monitor's release-copy convention.
+# If you prefer fresh-build-only, uncomment the next line:
+# lib/
+
+# tsbuildinfo
+*.tsbuildinfo
+
+# Editor / OS noise
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local env
+.env
+.env.*
+!.env.example
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# pnpm auto-generated workspace file (we don't use workspaces here)
+pnpm-workspace.yaml
+
+# Reference repos cloned for development (not shipped with the plugin)
+refs/
