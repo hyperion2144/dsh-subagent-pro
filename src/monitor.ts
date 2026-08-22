@@ -183,27 +183,25 @@ export function mountMonitor(ctxIn: Context, _resolved: ResolvedSubagentProSetti
     return merged
   }
 
-  // 注册 snapshot 路由——直接调用 ctx.webServer.register()（返回 disposer），
-  // 不用 ctx.effect 包裹。cordis 4.x 的 fiber mixin 在某些插件激活时序下尚未就绪
-  // （参见 refs/dsh-hud 的同款模式），导致 ctx.effect 偶发 undefined；直接调用更稳。
-  // 路由仅在 webServer 服务可用时注册；插件整体不阻塞。
-  if (ctx.webServer !== undefined) {
-    ctx.webServer.register({
-      kind: 'exact',
-      path: '/api/dsh-subagent-pro/snapshot',
-      handler: async (req: IncomingMessage, res: ServerResponse) => {
-        const url = new URL(req.url ?? '/', 'http://localhost')
-        const sessionId = url.searchParams.get('sessionId')
-        const payload: SnapshotPayload =
-          sessionId === null
-            ? { now: Date.now(), rows: [] }
-            : { sessionId, now: Date.now(), rows: await enrich(sessionId) }
-        res.writeHead(200, {
-          'content-type': 'application/json',
-          'cache-control': 'no-store',
-        })
-        res.end(JSON.stringify(payload))
-      },
-    })
-  }
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/api/dsh-subagent-pro/snapshot',
+        handler: async (req: IncomingMessage, res: ServerResponse) => {
+          const url = new URL(req.url ?? '/', 'http://localhost')
+          const sessionId = url.searchParams.get('sessionId')
+          const payload: SnapshotPayload =
+            sessionId === null
+              ? { now: Date.now(), rows: [] }
+              : { sessionId, now: Date.now(), rows: await enrich(sessionId) }
+          res.writeHead(200, {
+            'content-type': 'application/json',
+            'cache-control': 'no-store',
+          })
+          res.end(JSON.stringify(payload))
+        },
+      }),
+    'dsh-subagent-pro: snapshot route',
+  )
 }
