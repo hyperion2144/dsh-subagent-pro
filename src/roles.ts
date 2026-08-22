@@ -25,22 +25,32 @@ export function mountRoles(
 
   if (config.applyDefaultRoute !== false) {
     const seamCtx = ctx as unknown as import('./default-route.js').DefaultRouteSeamContext
-    ctx.effect(
-      () =>
-        applyDefaultRouteSeam(seamCtx, () => {
-          const s = resolved.get()
-          return {
-            ...(s.defaultProvider !== undefined && s.defaultProvider !== ''
-              ? { defaultProvider: s.defaultProvider }
-              : {}),
-            ...(s.defaultModel !== undefined && s.defaultModel !== ''
-              ? { defaultModel: s.defaultModel }
-              : {}),
-            fallbackOnInvalid: s.fallbackOnInvalid === false ? false : true,
-          }
-        }),
-      'dsh-subagent-pro: default-route-seam',
-    )
+    // 同样按 dsh-hud 模式（refs/dsh-hud/lib/index.js）包 try/catch：cordis 4.x 在某些
+    // 插件激活时序下 ctx.effect 尚未绑定 fiber mixin，会抛 "Cannot read properties
+    // of undefined (reading 'effect')"。seam 是锦上添花（不阻塞 delegation 工具注册），
+    // 失败时记 warning 即可。
+    try {
+      ctx.effect(
+        () =>
+          applyDefaultRouteSeam(seamCtx, () => {
+            const s = resolved.get()
+            return {
+              ...(s.defaultProvider !== undefined && s.defaultProvider !== ''
+                ? { defaultProvider: s.defaultProvider }
+                : {}),
+              ...(s.defaultModel !== undefined && s.defaultModel !== ''
+                ? { defaultModel: s.defaultModel }
+                : {}),
+              fallbackOnInvalid: s.fallbackOnInvalid === false ? false : true,
+            }
+          }),
+        'dsh-subagent-pro: default-route-seam',
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // eslint-disable-next-line no-console
+      console.warn('[dsh-subagent-pro] default-route-seam skipped: ' + message)
+    }
   }
 
   applyGuidance(

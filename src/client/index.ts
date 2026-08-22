@@ -28,15 +28,23 @@ export function apply(ctx: ClientContext): void {
   setRolesService(ctx.get('roles') as unknown as RolesService | undefined)
 
   // Inject global stylesheet (HUD-style tokens + monitor-compatible panel chrome).
-  ctx.effect(() => {
-    const tag = document.createElement('style')
-    tag.dataset.plugin = 'dsh-subagent-pro'
-    tag.textContent = STYLES
-    document.head.appendChild(tag)
-    return () => {
-      tag.remove()
-    }
-  }, 'dsh-subagent-pro: styles')
+  // 包 try/catch：refs/dsh-hud/lib/index.js 同款防御模式；client runtime ctx.effect
+  // 在某些 plugin 注册顺序下可能未 ready，失败时 styles 不注入但 toggle/panel 仍能工作。
+  try {
+    ctx.effect(() => {
+      const tag = document.createElement('style')
+      tag.dataset.plugin = 'dsh-subagent-pro'
+      tag.textContent = STYLES
+      document.head.appendChild(tag)
+      return () => {
+        tag.remove()
+      }
+    }, 'dsh-subagent-pro: styles')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    // eslint-disable-next-line no-console
+    console.warn('[dsh-subagent-pro] styles inject skipped: ' + message)
+  }
 
   // HUD-style toggle: conversation.input.left seat.
   // Slot names cast through unknown to bypass strict module-augmentation checks
