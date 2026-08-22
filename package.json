@@ -19,6 +19,10 @@
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./bridge": {
+      "types": "./lib/types/bridge-entry.d.ts",
+      "default": "./lib/bridge-entry.js"
+    },
     "./client": {
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
@@ -47,6 +51,7 @@
   },
   "files": [
     "lib/index.js",
+    "lib/bridge-entry.js",
     "lib/client.js",
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
@@ -57,12 +62,14 @@
     "docs"
   ],
   "dependencies": {
+    "@deepseek-ai/schemastery": "^3.5.6",
     "gray-matter": "^4.0.3",
     "react": "^18.2.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=0.1.0-rc.0",
     "@deepseek-ai/dsh-agent": ">=0.1.0-rc.0",
+    "@deepseek-ai/dsh-api-remotes": ">=0.1.0-rc.0",
     "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.0",
     "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.0-rc.0",
     "@deepseek-ai/dsh-client-ui-settings": ">=0.1.0-rc.0",

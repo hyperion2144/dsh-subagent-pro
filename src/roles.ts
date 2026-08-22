@@ -9,6 +9,7 @@ import type { SubagentProvider } from '@deepseek-ai/dsh-subagent'
 import { applyDefaultRouteSeam } from './default-route.js'
 import { createDelegationTool } from './delegation-tool.js'
 import { applyGuidance } from './guidance.js'
+import { createLlmInfoTool } from './llm-info-tool.js'
 import type { SubagentProConfig } from './index-types.js'
 import type { ResolvedSubagentProSettings } from './settings.js'
 import type { AgentMdHandle } from './agents-md.js'
@@ -48,6 +49,17 @@ export function mountRoles(
     () => resolved,
     toolName,
   )
+
+  // LLM info tool — independent of the subagent transport provider; registers
+  // once at apply time and never disposes. The tool tolerates a missing `llm`
+  // service (returns empty arrays) so it is safe to mount unconditionally.
+  const infoToolName = config.infoToolName ?? 'subagent_providers'
+  if (config.enableLlmInfoTool !== false) {
+    ctx.logger.info('[dsh-subagent-pro] registering ' + infoToolName + ' on host llm service')
+    const infoTool = createLlmInfoTool({ ctx, toolName: infoToolName })
+    const infoSvc = ctx.tools as unknown as { register: (t: typeof infoTool) => () => void }
+    infoSvc.register(infoTool)
+  }
 
   if (typeof config.maxDepth === 'number') assertSubagentMaxDepth(config.maxDepth)
   let disposeTool: (() => void) | undefined

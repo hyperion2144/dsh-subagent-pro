@@ -9,11 +9,19 @@
  * The merger (resolved.getRoles()) layers in:
  *   project agent md > global agent md > settings.roles (UI/调试沙盒)
  *
- * Live updates use dsh-settings' setSource/onChange wiring (director pattern);
- * md overlay updates trigger via `setMdRoles` from agents-md.ts.
+ * Live updates: installSettingsSection hands us a `setSource` getter at
+ * register time. The getter resolves to the current registered value on every
+ * call (settings.yaml hot reload + UI writes both flow through it). We store
+ * the getter and call it on every read so live edits are visible without an
+ * additional event subscription — same pattern as dsh-agent-default-model
+ * (dsh-agent-default-model/lib/index.js:45-50). Do NOT add a `settings/change`
+ * listener here: that event name does not exist (the real name is
+ * `settings/updated`, see dsh-settings/lib/types/types.d.ts:31).
  */
 import { homedir } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
+import { installSettingsSection } from '@deepseek-ai/dsh-settings'
 
 import type { RoleTemplate, SubagentProSettings } from './route-resolver.js'
 
@@ -21,6 +29,16 @@ export type { RoleTemplate, SubagentProSettings } from './route-resolver.js'
 
 /** Settings namespace id (kebab-case; matches cordis.patch.yml entry id). */
 export const SUBAGENT_PRO_SETTINGS_NAMESPACE = 'subagent-pro'
+
+/**
+ * Permissive schemastery schema for the subagent-pro namespace. Schemastery
+ * makes all object fields optional by default; `.loose()` opts out of strict
+ * key checks so future plugin versions writing new fields don't get rejected
+ * by older plugin builds.
+ */
+export const SubagentProSettingsSchema: z<SubagentProSettings> = z
+  .object({})
+  .loose() as unknown as z<SubagentProSettings>
 
 /** Source of a role in the merged table — used by the role editor to mark md-synced rows. */
 export type RoleSource = 'project-md' | 'global-md' | 'settings'
@@ -33,7 +51,7 @@ export interface MergedRole extends RoleTemplate {
 }
 
 export interface ResolvedSubagentProSettings {
-  /** The current raw settings snapshot (settings.yaml + UI overrides). */
+  /** The current resolved settings snapshot (live: re-reads on every call). */
   get(): SubagentProSettings
   /** The current merged role table (md > settings). */
   getRoles(): MergedRole[]
@@ -78,19 +96,58 @@ export function validateSettings(value: SubagentProSettings): void {
   }
 }
 
+/**
+ * Snapshot holder — bridges installSettingsSection's hooks to the consumer-
+ * facing API. Same shape as dsh-plugin-subagent-director's
+ * `createSettingsSnapshot`:
+ *
+ *   - `hooks.setSource(getter)` is called by installSettingsSection ONCE the
+ *     namespace is registered; it captures a live getter on the scope.
+ *   - `hooks.onChange()` is called by installSettingsSection after each commit;
+ *     we re-invoke the captured source to refresh the cached snapshot, so the
+ *     getter always sees the latest value (no reliance on a cordis event).
+ *   - `get()` returns the cached snapshot.
+ *
+ * The dsh-settings SettingsScope's `get()` already returns the live value
+ * (`registration.resolved` is updated in-place on every commit), so
+ * re-invoking the source on every onChange is sufficient and matches the
+ * dsh-agent-default-model pattern.
+ */
+export interface SettingsSnapshot<T> {
+  hooks: { setSource(getter: () => T): void; onChange(): void }
+  get(): T
+}
+
+export function createSettingsSnapshot<T>(initial: T): SettingsSnapshot<T> {
+  let source: (() => T) | undefined
+  let snapshot: T = initial
+  return {
+    hooks: {
+      setSource(getter) {
+        source = getter
+        snapshot = getter()
+      },
+      onChange() {
+        if (source !== undefined) snapshot = source()
+      },
+    },
+    get() {
+      return snapshot
+    },
+  }
+}
+
 export function resolveSettings(
   ctx: Context,
   config: { globalAgentDir?: string; projectAgentDirName?: string },
 ): ResolvedSubagentProSettings {
-  const settingsSvc = ctx.get('settings')
   const globalAgentDir = config.globalAgentDir ?? homedir() + '/.dsh/agents'
   const projectAgentDirName = config.projectAgentDirName ?? '.dsh/agents'
 
-  let base: SubagentProSettings = {}
   let mdLayer: MergedRole[] = []
   let warnings: string[] = []
 
-  const computeMerged = (): MergedRole[] => {
+  const computeMerged = (base: SubagentProSettings): MergedRole[] => {
     const out: MergedRole[] = []
     for (const r of mdLayer) out.push(r)
     for (const [id, role] of Object.entries(base.roles ?? {})) {
@@ -104,44 +161,18 @@ export function resolveSettings(
     return out
   }
 
-  if (settingsSvc === undefined) {
-    const logger = (ctx as unknown as { logger?: { debug?: (m: string) => void } }).logger
-    logger?.debug?.('[subagent-pro] no settings service mounted; using empty base')
-    return {
-      get: () => base,
-      getRoles: () => computeMerged(),
-      setMdRoles: (roles, w) => {
-        mdLayer = roles
-        warnings = w
-      },
-      getWarnings: () => warnings,
-      globalAgentDir,
-      projectAgentDirName,
-    }
-  }
-
-  // Lazy settings subscription: read current value, subscribe to changes.
-  let cached: SubagentProSettings = {}
-  try {
-    const descriptors = (settingsSvc as { describe(opts: { redactSecrets: boolean }): Array<{ ns: string; value: SubagentProSettings }> }).describe({ redactSecrets: true })
-    for (const d of descriptors) {
-      if (d.ns === SUBAGENT_PRO_SETTINGS_NAMESPACE) cached = d.value ?? {}
-    }
-  } catch (err) {
-    const logger = (ctx as unknown as { logger?: { warn?: (m: string) => void } }).logger
-    logger?.warn?.('[subagent-pro] settings describe failed: ' + (err instanceof Error ? err.message : String(err)))
-  }
-  base = cached
-
-  const onChange = (ctx as unknown as { on?: (event: string, listener: (ns: string, next: unknown) => void) => void }).on
-  onChange?.('settings/change', (ns: string, next: unknown) => {
-    if (ns !== SUBAGENT_PRO_SETTINGS_NAMESPACE) return
-    base = (next as SubagentProSettings) ?? {}
-  })
+  // Snapshot holder — follows the dsh-plugin-subagent-director pattern:
+  // installSettingsSection calls snapshot.hooks.setSource() with the live
+  // SettingsScope.get() getter, and snapshot.hooks.onChange() after each
+  // commit. The snapshot getter returns the cached value, so every consumer
+  // (default route seam, role guidance, delegation tool) sees the same
+  // resolved view without re-registering event listeners.
+  const snapshot = createSettingsSnapshot<SubagentProSettings>({})
+  installSubagentProSettings(ctx, {}, snapshot.hooks)
 
   return {
-    get: () => base,
-    getRoles: () => computeMerged(),
+    get: () => snapshot.get(),
+    getRoles: () => computeMerged(snapshot.get()),
     setMdRoles: (roles, w) => {
       mdLayer = roles
       warnings = w
@@ -149,5 +180,46 @@ export function resolveSettings(
     getWarnings: () => warnings,
     globalAgentDir,
     projectAgentDirName,
+  }
+}
+
+/**
+ * Install the `subagent-pro` settings namespace into the host settings service.
+ *
+ * No-op if the deployment has no settings service mounted (e.g. headless profile
+ * without dsh-settings-file). After this call, ctx.settings.describe() lists
+ * `subagent-pro` and our bridge endpoint at /api/dsh-subagent-pro/settings can
+ * read/write it.
+ *
+ * Follows the dsh-plugin-subagent-director pattern: installSettingsSection
+ * captures the live SettingsScope.get() getter via `hooks.setSource(...)` and
+ * fires `hooks.onChange()` after each commit. Our SettingsSnapshot wires
+ * those hooks directly so consumer getters always see the latest value.
+ */
+export function installSubagentProSettings(
+  ctx: Context,
+  entry: SubagentProSettings = {},
+  hooks: {
+    setSource(current: () => SubagentProSettings): void
+    onChange(): void
+  },
+): void {
+  const settingsSvc = (ctx as unknown as { get(name: string): unknown }).get('settings')
+  if (settingsSvc === undefined) return
+  try {
+    installSettingsSection<SubagentProSettings>(
+      ctx,
+      SUBAGENT_PRO_SETTINGS_NAMESPACE as never,
+      SubagentProSettingsSchema,
+      entry,
+      hooks,
+    )
+  } catch (err) {
+    // Tolerate a second install (hot-reload, double-mount): settings.register
+    // throws when the namespace already exists. Log + move on.
+    const message = err instanceof Error ? err.message : String(err)
+    if (!/already (declared|registered)/i.test(message)) {
+      throw err
+    }
   }
 }

@@ -28,7 +28,7 @@ export type { SubagentProConfig } from './index-types.js'
 import { mountMonitor } from './monitor.js'
 import { mountRoles } from './roles.js'
 import { loadAgentMdRoles, refreshAgentMdRoles } from './agents-md.js'
-import { resolveSettings } from './settings.js'
+import { resolveSettings, SUBAGENT_PRO_SETTINGS_NAMESPACE } from './settings.js'
 
 export const name = 'dsh-subagent-pro'
 export const inject = [
@@ -61,7 +61,17 @@ export function apply(ctx: Context, config: SubagentProConfig = {}): void {
     resolved.setMdRoles(merged.roles, merged.warnings)
   }
   reloadMd()
-  ;(ctx as unknown as { on: (event: string, listener: () => void) => void }).on('settings/change', reloadMd)
+  // `settings/updated` (not `settings/change`) is the canonical resolved-value
+  // event from @deepseek-ai/dsh-settings; re-scan agent md on every commit so
+  // edits to the subagent-pro namespace (or any other namespace that the md
+  // overlay depends on) refresh the role table without a restart.
+  ;(ctx as unknown as { on: (event: string, listener: (ns: string) => void) => void }).on(
+    'settings/updated',
+    (ns: string) => {
+      if (ns !== SUBAGENT_PRO_SETTINGS_NAMESPACE) return
+      reloadMd()
+    },
+  )
 
   // 3. Live subagent monitor — event attribution + snapshot endpoint.
   mountMonitor(ctx, resolved)

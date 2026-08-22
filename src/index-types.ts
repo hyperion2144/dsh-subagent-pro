@@ -13,6 +13,14 @@ export interface SubagentProConfig {
   subagentProvider?: string
   /** Model-facing tool name. Default 'subagent_role'. */
   toolName?: string
+  /**
+   * Model-facing tool name for the LLM info tool that exposes available
+   * providers / models / reasoning-effort levels to the agent. Default
+   * 'subagent_providers'.
+   */
+  infoToolName?: string
+  /** Register the LLM info tool. Default true. Set false to disable. */
+  enableLlmInfoTool?: boolean
   /** Expose `run_in_background` (default true). */
   enableRunInBackground?: boolean
   /** Background execution policy: 'one-shot' (default) or 'continuable'. */

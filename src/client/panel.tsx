@@ -228,9 +228,22 @@ function layoutStyle(minimized = false): CSSProperties {
 
 type PanelProps = PropsRuntime<'root'>
 
-export function Panel(_props: PanelProps): ReactElement | null {
+export function Panel(props: PanelProps): ReactElement | null {
   const store = useStore()
   const sessionsSvc = getSessionsService()
+
+  // Detect whether the current session is itself a subagent — `currentAddress`
+  // is the SubagentAddress the runtime set when we navigated into the child
+  // session via `sessionsSvc.openSubagent(...)`. `parentSessionId` is the
+  // session to jump back to.
+  // (Mirrors dsh-subagent-monitor's pattern; the runtime selector exposes
+  // `currentAddress.parentSessionId` but the type union doesn't list it, so
+  // we cast through unknown.)
+  const subagentParent = props.useSessions(
+    (select: unknown) =>
+      (select as { currentAddress?: { parentSessionId?: string } } | undefined)
+        ?.currentAddress?.parentSessionId,
+  ) as string | undefined
 
   const panelRef = useRef<HTMLDivElement | null>(null)
   const minimizedRef = useRef(store.minimized)
@@ -369,6 +382,16 @@ export function Panel(_props: PanelProps): ReactElement | null {
       </div>
       <span className="dsp-panel-title">子代理面板</span>
       {running > 0 ? <span className="dsp-panel-running">{running}</span> : null}
+      {subagentParent !== undefined && sessionsSvc !== undefined ? (
+        <button
+          className="dsp-btn dsp-back"
+          type="button"
+          title="返回主会话"
+          onClick={() => sessionsSvc?.open(subagentParent)}
+        >
+          ← 主会话
+        </button>
+      ) : null}
       <span className="dsp-panel-spacer" />
       <button
         className="dsp-btn"
@@ -414,7 +437,24 @@ export function Panel(_props: PanelProps): ReactElement | null {
           const indent = Math.max(0, depth - 1) * 14
           const modeText =
             row.mode === 'continuable' ? '连续对话' : row.mode === 'one-shot' ? '一次性' : ''
-          const metaLine = [row.provider, modeText, shortId(row.id)]
+          // 模型信息整体（方案 A）：provider · model (+ reasoningEffort)
+          // 都放进同一个 chip —— provider 和 model 属于同一信息单位，不该
+          // 分家（provider 在 meta 行、model 在 chip 会割裂阅读）。
+          // model 仍来自 host 侧 sessionModel（request/header 事件折叠），
+          // chip 是独立元素，长 model id 不会被 meta 行 ellipsis 截断。
+          const providerPart =
+            row.provider !== undefined && row.provider !== '' ? row.provider : ''
+          const modelPart =
+            row.model !== undefined && row.model !== '' ? row.model : ''
+          const effortPart =
+            row.reasoningEffort !== undefined && row.reasoningEffort !== ''
+              ? row.reasoningEffort
+              : ''
+          const modelChip =
+            modelPart !== ''
+              ? [providerPart, modelPart, effortPart].filter((s) => s !== '').join(' · ')
+              : ''
+          const metaLine = [modeText, shortId(row.id)]
             .filter((value) => typeof value === 'string' && value !== '')
             .join(' · ')
           return (
@@ -424,6 +464,7 @@ export function Panel(_props: PanelProps): ReactElement | null {
                 <span className="dsp-row-label" title={rowLabel(row)}>
                   {rowLabel(row)}
                 </span>
+                {modelChip !== '' ? <span className="dsp-model-chip">{modelChip}</span> : null}
                 {row.mode !== undefined && sessionsSvc !== undefined ? (
                   <button
                     className="dsp-btn dsp-row-open"
@@ -450,32 +491,44 @@ export function Panel(_props: PanelProps): ReactElement | null {
 
   const footer = (
     <div className="dsp-panel-footer">
-      <span className="dsp-panel-stats">
-        {'运行 ' + running + ' · 完成 ' + done + ' · 异常 ' + failed}
-      </span>
-      <span className="dsp-panel-spacer" />
-      {store.hidden.length > 0 ? (
+      <div className="dsp-panel-footer-stats">
+        <span className="dsp-stat-chip dsp-stat-running">
+          <span className="dsp-stat-num">{running}</span>
+          <span className="dsp-stat-label">运行</span>
+        </span>
+        <span className="dsp-stat-chip dsp-stat-completed">
+          <span className="dsp-stat-num">{done}</span>
+          <span className="dsp-stat-label">完成</span>
+        </span>
+        <span className="dsp-stat-chip dsp-stat-failed">
+          <span className="dsp-stat-num">{failed}</span>
+          <span className="dsp-stat-label">异常</span>
+        </span>
+      </div>
+      <div className="dsp-panel-footer-actions">
+        {store.hidden.length > 0 ? (
+          <button
+            className="dsp-btn"
+            type="button"
+            onClick={() => dispatch({ hidden: [] })}
+          >
+            {'显示已隐藏 ' + store.hidden.length}
+          </button>
+        ) : null}
         <button
           className="dsp-btn"
           type="button"
-          onClick={() => dispatch({ hidden: [] })}
+          onClick={() => {
+            const hidden = [...store.hidden]
+            for (const row of store.rows) {
+              if (row.status !== 'running' && !hidden.includes(row.id)) hidden.push(row.id)
+            }
+            dispatch({ hidden })
+          }}
         >
-          {'显示已隐藏 ' + store.hidden.length}
+          清空已完成
         </button>
-      ) : null}
-      <button
-        className="dsp-btn"
-        type="button"
-        onClick={() => {
-          const hidden = [...store.hidden]
-          for (const row of store.rows) {
-            if (row.status !== 'running' && !hidden.includes(row.id)) hidden.push(row.id)
-          }
-          dispatch({ hidden })
-        }}
-      >
-        清空已完成
-      </button>
+      </div>
     </div>
   )
 

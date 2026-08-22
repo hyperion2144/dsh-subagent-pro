@@ -25,6 +25,8 @@ export interface MonitorRow {
   parentId?: string
   runId?: string
   provider?: string
+  model?: string
+  reasoningEffort?: string
   local?: boolean
   startedAt?: number
   endedAt?: number
@@ -139,13 +141,50 @@ export interface SessionsService {
   openSubagent(address: { parentSessionId: string; childSessionId: string; mode: string }): void
 }
 
-export interface RolesService {
-  describe(opts?: { redactSecrets?: boolean }): Array<{ ns: string; value: Record<string, unknown> }>
-  mutate(ns: string, ops: ReadonlyArray<{ path: string; op: 'set' | 'unset'; value?: unknown }>, expectedRevision?: number): Promise<void>
+/**
+ * Settings access via the host bridge entry (prefix route
+ * /api/dsh-subagent-pro/settings, registered by dsh-subagent-pro-bridge).
+ * The browser editor fetches this directly — no apiproxy involved.
+ *
+ * Paths in `mutate` are string arrays (per dsh-settings v0.1.1):
+ *   { path: ['defaultProvider'], op: 'set', value: 'deepseek-official' }
+ *   { path: ['roles', 'code-reviewer'], op: 'set', value: { displayName: ... } }
+ *   { path: ['roles', 'code-reviewer'], op: 'unset' }
+ */
+export interface SettingsService {
+  read(): Promise<{ view: Record<string, unknown>; revision: number }>
+  mutate(
+    ops: ReadonlyArray<{ path: readonly string[]; op: 'set' | 'unset'; value?: unknown }>,
+    expectedRevision: number,
+  ): Promise<{ view: Record<string, unknown>; revision: number }>
+  /** LLM provider enumeration for the cascading-select UI. */
+  listProviders(): Promise<LlmProviderInfo[]>
+  /** Models for a given provider (drives model dropdown). */
+  listModels(provider: string): Promise<LlmModelInfo[]>
+  /** Selectable reasoning efforts for one (provider, model) route. */
+  listReasoningEfforts(provider: string, model: string): Promise<LlmReasoningEffortInfo[]>
+}
+
+/** Provider entry as returned by the LLM-info bridge endpoint. */
+export interface LlmProviderInfo {
+  id: string
+  name: string
+}
+
+/** Model entry. Reasoning-effort list is fetched separately per (provider, model). */
+export interface LlmModelInfo {
+  id: string
+  name: string
+}
+
+/** Selectable reasoning effort for one (provider, model) route. */
+export interface LlmReasoningEffortInfo {
+  id: string
+  name: string
 }
 
 let sessionsSvc: SessionsService | undefined
-let rolesSvc: RolesService | undefined
+let settingsSvc: SettingsService | undefined
 
 export function setSessionsService(service: SessionsService | undefined): void {
   sessionsSvc = service
@@ -153,9 +192,9 @@ export function setSessionsService(service: SessionsService | undefined): void {
 export function getSessionsService(): SessionsService | undefined {
   return sessionsSvc
 }
-export function setRolesService(service: RolesService | undefined): void {
-  rolesSvc = service
+export function setSettingsService(service: SettingsService | undefined): void {
+  settingsSvc = service
 }
-export function getRolesService(): RolesService | undefined {
-  return rolesSvc
+export function getSettingsService(): SettingsService | undefined {
+  return settingsSvc
 }

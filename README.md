@@ -11,6 +11,7 @@
 - **实时子代理面板** — 监听 `subagent/start` 与 `subagent/end` 事件，按父链归因到根会话；每根会话最多保留 200 条；浏览器每 1 秒轮询 `/api/dsh-subagent-pro/snapshot`；状态点对齐官方 StateDot 规格（运行中 = 像素追逐，终态 = 实心 + 10% 同色光晕）。
 - **HUD 风格图标按钮** — 28×28 线性 SVG 图标，注入 `conversation.input.left` slot；右上角 warn-yellow 角标显示运行中子代理数；与官方交互色板一致。
 - **角色路由委派** — 注册 `subagent_role` 工具，支持四层回退（call > role > default > inherit），persona 与 toolFilter 注入到 `SubagentStartRequest`；foreground / one-shot 后台 / continuable 后台三种执行模式。
+- **LLM 路由自省工具** — 注册 `subagent_providers` 工具，让主代理可主动查询当前 `llm` 服务暴露的 provider、model、reasoning-effort 列表（与设置面板的下拉同源），agent 在不确定用什么模型时不必硬编码。
 - **默认模型兜底** — 配置 `defaultProvider`/`defaultModel` 后，任何未显式指定 `agentOptions` 的子代理（包括内置 `subagent`/`subagent_fork` 工具）自动应用默认；不存在的 provider 静默回退到父模型。
 - **Claude Code 风格 agent md** — 自动扫描 `~/.dsh/agents/*.md`（全局）与 `<cwd>/.dsh/agents/*.md`（项目）目录；frontmatter 字段映射到 RoleTemplate；正文作为 persona 注入到子代理。
 - **角色优先级** — project md > global md > settings.roles，三者并存时主代理指引列出全部，delegate 时按 role id（kebab-case 文件名）调用。
@@ -67,6 +68,23 @@ subagent_role({ role: "code-reviewer", model: "deepseek-chat", prompt: "..." })
 ### 角色委派（agent md 角色）
 
 在 `~/.dsh/agents/` 或 `<project>/.dsh/agents/` 写一个 md 文件（详见下一节）；主代理会自动加载并把 `persona` 注入到子代理的 system prompt。
+
+### 查询可用模型（`subagent_providers`）
+
+主代理可随时调用 `subagent_providers` 查询当前 host `llm` 服务暴露的 provider / model / reasoning-effort 列表，无需重启或查看配置文件：
+
+```text
+subagent_providers({ action: "list_providers" })
+// -> { kind: "providers", providers: [{ id: "minimax-cn", name: "minimax-cn" }, ...] }
+
+subagent_providers({ action: "list_models", provider: "opencode-go" })
+// -> { kind: "models", provider: "opencode-go", models: [{ id: "deepseek-v4-flash", ... }] }
+
+subagent_providers({ action: "list_reasoning_efforts", provider: "opencode-go", model: "deepseek-v4-flash" })
+// -> { kind: "reasoning", efforts: [...], defaultEffort: "low" }
+```
+
+数据源与设置面板的下拉（`/api/dsh-subagent-pro/llm/*`）完全一致。如果 `llm` 服务不可用，工具返回空数组而不是抛错。
 
 ## 角色定义
 

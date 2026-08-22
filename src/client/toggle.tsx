@@ -14,27 +14,27 @@ import { autoOpenIfDesktop, dispatch, ensurePolling, useStore } from './store'
 
 type ToggleProps = PropsRuntime<'root'>
 
-/** Linear SVG icon: a subagent "tree of forks" — root node with two children. */
+/** Lucide `bot` icon — AI 聊天机器人. Path data from lucide.dev (24×24 viewBox). */
 function SubagentIcon(): ReactElement {
   return (
     <svg
       className="dsp-toggle-icon"
       width={14}
       height={14}
-      viewBox="0 0 16 16"
+      viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={1.5}
+      strokeWidth={2}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <circle cx={4} cy={3.5} r={1.4} />
-      <circle cx={4} cy={12.5} r={1.4} />
-      <circle cx={12} cy={8} r={1.4} />
-      <path d="M4 4.9 V11.1" />
-      <path d="M4 8 H10.6" />
-      <path d="M5 5.5 C 7 5.5 9 7 10.6 7.3" />
+      <path d="M12 8V4H8" />
+      <rect width="16" height="12" x="4" y="8" rx="2" />
+      <path d="M2 14h2" />
+      <path d="M20 14h2" />
+      <path d="M15 13v2" />
+      <path d="M9 13v2" />
     </svg>
   )
 }

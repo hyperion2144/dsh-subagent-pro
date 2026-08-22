@@ -4,9 +4,20 @@ All notable changes to `dsh-subagent-pro` are recorded here. Format follows Keep
 
 ## [Unreleased]
 
-### Changed
+### Added
 
-- tsdown: migrate `clientHalf` from deprecated `external` / `noExternal` to `deps.neverBundle` / `deps.alwaysBundle`; build output byte-equivalent, removes two deprecation warnings.
+- **`subagent_providers` model tool** — lets the main agent introspect the host `llm` service for routable providers, models, and reasoning-effort levels. Three actions (`list_providers` / `list_models` / `list_reasoning_efforts`) backed by the same `ctx.llm` calls that power the settings-panel dropdowns (`/api/dsh-subagent-pro/llm/*`). Tolerates a missing `llm` service (returns empty arrays). Tool name configurable via `infoToolName`; can be disabled via `enableLlmInfoTool: false`.
+- New `src/llm-info-tool.ts` host module, registered alongside `subagent_role` in `roles.ts`; 15 new pure-function tests in `src/__tests__/llm-info-tool.test.ts`.
+- **`dsh-subagent-pro-bridge` loader entry** (`src/bridge-entry.ts`, patched via `cordis.patch.yml`) — self-publishes two webServer prefix routes so the browser settings editor can read/write the `subagent-pro` namespace without the apiproxy `exposedNamespaces()` allowlist: `GET/PATCH /api/dsh-subagent-pro/settings/*` and LLM enumeration `GET /api/dsh-subagent-pro/llm/*` (providers / models / reasoning-efforts via `llm.resolveModelInfo`). Only active in web profiles (injects `webServer`).
+- **Settings editor now writes real settings** — the role-editor fetches through the bridge endpoints; provider / model / reasoningEffort selectors are cascading dropdowns fed by live `llm` enumeration (fall back to text input when the bridge is unreachable).
+- **Per-row model info in the monitor panel** — each row shows a dedicated model chip (`provider · model · reasoningEffort`) resolved from the child session's OWN persisted `request/header` events (`session.requestHeader()` live fast path; `@deepseek-ai/dsh-api-remotes.inspectApiRemoteSession` + `foldRequestHeader` cold path). Works for running, ended, and restart-survived historical subagents — no custom persistence.
+- **"← 主会话" back button** in the panel header — shown when the current session is itself a subagent (`useSessions(...currentAddress.parentSessionId)`), jumps back to the parent session.
+- **Row-foot CSS alignment** — `.dsp-row-label/-open/-foot/-meta/-time` rules (ellipsis + tabular-nums) ported from the monitor reference; badges now anchor via `position: relative` on the toggle; HUD-style footer stat chips.
+
+### Fixed
+
+- **Default subagent model now actually applies.** The plugin previously subscribed to a non-existent `settings/change` event and cached the initial `describe()` snapshot, so the `applyDefaultRouteSeam` never saw user-edited `subagent-pro.defaultProvider` / `defaultModel` after startup — subagents silently fell back to `agent-default-model`. Rewired to use `installSettingsSection`'s `setSource` hook (the dsh-agent-default-model pattern): the snapshot getter now re-invokes the live source on every read, so settings.yaml hot reload + UI writes both flow through immediately. `src/index.ts` reload listener switched from the bogus `settings/change` to the real `settings/updated` event. New test `settings-snapshot.test.ts` locks down the live-source contract.
+- **Model lookup for historical subagents** — `enrich()` queried models only from the in-memory `runs` map (empty after a host restart); now it iterates the durable descendant catalog ids and cold-reads each session's `request/header` events from persistence.
 
 ## [0.1.0] - 2026-08-20
 

@@ -94,6 +94,15 @@ director ARCH 6 的论证、unittests 19 个全过。
 
 只有部分 subagent transport provider 支持 persona / toolFilter（例如 spawn 支持，fork 不支持）；不支持时通过 assertDelegationCapabilities 抛 subagent-director: role binds a persona but transport provider ... does not support the persona capability，避免运行时静默丢弃 persona。
 
+### 2.10 为什么增加 subagent_providers 工具而不是复用其它工具
+
+主代理在很多场景下需要先知道「现在能用什么 provider / model」再决定调用 `subagent_role`。bridge-entry.ts 已经在 `ctx.llm` 之上做了 `/api/dsh-subagent-pro/llm/{providers,models,reasoning-efforts}` 三个 HTTP 端点供 UI 用，但模型本身没接口。直接暴露同一个 `ctx.llm` 表面给 agent 是最小成本方案：
+
+- 数据源唯一：与设置面板下拉同源，新增 / 删除 provider 不需要改 model 端 schema；
+- 注册简单：只依赖 `ctx.llm`，不依赖 subagent transport provider，所以放在 `roles.ts` 的 apply-time 立即注册，无需 `subagent/provider-added` 事件；
+- 缺服务容错：`llm` 不可用时返回空数组而不是抛错，符合「工具失败不应打断对话」的稳健性预期；
+- 输出 schema 用 `oneOf` 三分支（providers / models / reasoning），让模型在工具调用后能精确区分。
+
 ## 3. 文件结构
 
 src/index.ts                  # host 半主入口（apply）
@@ -104,6 +113,7 @@ src/agents-md.ts              # agent md 加载器（Claude Code 风格 frontmat
 src/route-resolver.ts         # 纯函数 4 层回退解析
 src/settings.ts               # settings 命名空间 + 校验 + 实时快照
 src/delegation-tool.ts        # subagent_role 模型工具定义
+src/llm-info-tool.ts          # subagent_providers 模型工具定义（LLM 路由自省）
 src/default-route.ts          # default route seam（包装 start/startContinuable）
 src/guidance.ts               # system prompt 角色清单 section
 src/client/index.ts           # client 半主入口（slots）
@@ -119,6 +129,7 @@ src/__tests__/ 下的纯函数测试（tsx --test）：
 
 - route-resolver.test.ts：8 个用例（call/role/default/inherit 优先级、displayName 反查、role persona 注入、未知 role warn、reasoningEffort advisory、模型单独缺省）。
 - agents-md.test.ts：10 个用例（kebab-case 校验、.md 后缀剥离、lastSegment 双分隔符、fileIdFromPath 组合、frontmatter 完整/缺失/不闭合、model 拆分、tools 拆分）。
+- llm-info-tool.test.ts：15 个用例（id 兜底、validateLlmInfoArgs 三 action 校验、未知 action、getLlmInfoService 缺方法容错、createLlmInfoTool 三 action 分派、缺失 reasoning 块、缺 llm 服务返空、validation 早于 llm 调用）。
 
 运行时集成测试依赖 DSH 真机；此处未自动化，建议在 DSH web profile 中手动验证：
 

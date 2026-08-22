@@ -34,6 +34,7 @@ const PLATFORM_MODULES = [
   '@deepseek-ai/dsh-agent',
   '@deepseek-ai/dsh-llm',
   '@deepseek-ai/dsh-session',
+  '@deepseek-ai/dsh-api-remotes',
   '@deepseek-ai/dsh-subagent',
   '@deepseek-ai/dsh-tools',
   '@deepseek-ai/dsh-settings',
@@ -81,4 +82,22 @@ const clientHalf: UserConfig = {
   },
 }
 
-export default defineConfig([nodeHalf, clientHalf])
+/**
+ * Bridge entry — registers /api/dsh-subagent-pro/settings on the host web server
+ * so the browser editor can read/write the subagent-pro settings namespace
+ * directly (apiproxy's exposedNamespaces() allowlist doesn't list third-party
+ * plugins). Only active in web profiles (injects webServer).
+ */
+const bridgeHalf: UserConfig = {
+  name: `${ID}/bridge`,
+  entry: { 'bridge-entry': 'src/bridge-entry.ts' },
+  outDir: 'lib',
+  format: ['esm'],
+  platform: 'node',
+  target: 'es2024',
+  clean: false,
+  dts: false,
+  fixedExtension: false,
+}
+
+export default defineConfig([nodeHalf, bridgeHalf, clientHalf])

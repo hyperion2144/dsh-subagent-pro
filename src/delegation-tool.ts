@@ -293,8 +293,16 @@ export function createDelegationTool(opts: CreateDelegationToolOptions): unknown
       const settings = getSettings()
       const route = resolveRoute({ args, settings, parent: parent.options }, lookup)
       const warnings = [...route.warnings]
+      // [DIAG] dump every input that affects route + reasoningEffort propagation
       ctx.logger.info(
-        '[' + DELEGATION_TOOL_PREFIX + '] delegate layer=' + route.layer + ' mode=' + (continuable ? 'continuable' : 'one-shot') + ' transport=' + providerName + ' route=' + JSON.stringify(route.agentOptions ?? null) + ' persona=' + (route.persona ? 'yes' : 'no') + ' warnings=' + JSON.stringify(warnings),
+        '[' + DELEGATION_TOOL_PREFIX + '] DIAG: parentOptions=' +
+          JSON.stringify(parent.options) +
+          ' settings=' + JSON.stringify(settings) +
+          ' args.provider=' + JSON.stringify(args.provider) +
+          ' args.model=' + JSON.stringify(args.model),
+      )
+      ctx.logger.info(
+        '[' + DELEGATION_TOOL_PREFIX + '] delegate layer=' + route.layer + ' mode=' + (continuable ? 'continuable' : 'one-shot') + ' transport=' + providerName + ' route=' + JSON.stringify(route.agentOptions ?? null) + ' reasoningEffort=' + JSON.stringify(route.reasoningEffort) + ' persona=' + (route.persona ? 'yes' : 'no') + ' warnings=' + JSON.stringify(warnings),
       )
 
       const explicitProvider = isEmpty(args.provider) ? undefined : args.provider
@@ -346,11 +354,51 @@ export function createDelegationTool(opts: CreateDelegationToolOptions): unknown
 
       const runInBackground = backgroundEnabled ? args.run_in_background ?? continuable : false
 
+      // After resolving the route, emit `dsh-subagent-pro/run-route` with the
+      // resolved provider/model/reasoningEffort so the monitor panel can show
+      // what model each subagent actually used. The runtime's `subagent/start`
+      // event only carries `provider`, so we round-trip the route through
+      // cordis here. Fired for foreground + continuable + background — all
+      // three start paths flow through here. The lookup key on the monitor
+      // side is the child session id (== `SubagentRun.id`), the only handle
+      // every start path actually exposes.
+      //
+      // IMPORTANT: the cordis events API lives on `ctx.events`, NOT on `ctx`
+      // itself — `ctx.emit` is undefined. Verified by reading
+      // @deepseek-ai/dsh-subagent/lib/index.js:173 which uses
+      // `ctx.events.dispatch("emit", ...)`. The earlier `cordisEmit?.(...)`
+      // pattern silently no-op'd because `(ctx as any).emit === undefined`.
+      const ctxEvents = (ctx as unknown as {
+        events?: { dispatch(type: string, args: unknown[]): unknown[] }
+      }).events
+      const emitRoute = (payload: {
+        childId: string
+        provider?: string | undefined
+        model?: string | undefined
+        reasoningEffort?: string | undefined
+      }): void => {
+        if (ctxEvents === undefined) return
+        // dispatch("emit", [name, ...args]) — listeners receive the trailing
+        // args as their positional parameters.
+        const callbacks = ctxEvents.dispatch('emit', [
+          'dsh-subagent-pro/run-route',
+          payload,
+        ]) as Array<(p: typeof payload) => void>
+        for (const cb of callbacks) cb(payload)
+      }
+      const routeSnapshot = {
+        childId: '',
+        provider: route.agentOptions?.provider,
+        model: route.agentOptions?.model,
+        reasoningEffort: route.reasoningEffort,
+      }
+
       if (runInBackground && continuable) {
         if (provider.prepareContinuable === undefined) {
           throw new Error(ERROR_PREFIX + ' transport provider "' + providerName + '" does not support backgroundMode: continuable — switch the subagent provider or use backgroundMode: "one-shot"')
         }
         const start = await ctx.subagents.startContinuable({ provider: providerName, label: args.description, request, signal: exec.signal })
+        emitRoute({ ...routeSnapshot, childId: String(start.childId) })
         return { kind: 'continuable' as const, subagentId: start.childId }
       }
 
@@ -371,14 +419,20 @@ export function createDelegationTool(opts: CreateDelegationToolOptions): unknown
               const controller = new AbortController()
               return {
                 cancel: (reason?: string) => controller.abort(reason ?? 'background subagent task killed'),
-                done: settleBackgroundRun(ctx.subagents.start(providerName, { ...request, signal: controller.signal }), controller.signal),
+                done: (async () => {
+                  const sub = await ctx.subagents.start(providerName, { ...request, signal: controller.signal })
+                  emitRoute({ ...routeSnapshot, childId: String(sub.id) })
+                  return settleBackgroundRun(Promise.resolve(sub), controller.signal)
+                })(),
               }
             },
           }),
         }
       }
 
-      return settleForegroundRun(await ctx.subagents.start(providerName, { ...request, signal: exec.signal }))
+      const foregroundSub = await ctx.subagents.start(providerName, { ...request, signal: exec.signal })
+      emitRoute({ ...routeSnapshot, childId: String(foregroundSub.id) })
+      return settleForegroundRun(foregroundSub)
     },
   })
   // Cast the strict defineTool return to a structural unknown so the caller

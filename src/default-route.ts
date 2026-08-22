@@ -38,10 +38,46 @@ export function resolveSeamAgentOptions(input: SeamResolveInput): Pick<AgentOpti
 export interface DefaultRouteSeamContext {
   get(name: string): unknown
   logger: { info(message: string): void; warn(message: string): void }
+  events?: {
+    dispatch(type: string, args: unknown[]): Array<(payload: unknown) => void>
+  }
   subagents: {
     start: (name: string, request: Record<string, unknown>) => Promise<unknown>
     startContinuable: (spec: { request: Record<string, unknown> }) => Promise<unknown>
   }
+}
+
+/**
+ * Dispatch the `dsh-subagent-pro/run-route` custom event (same plumbing as the
+ * delegation tool) so the monitor panel can show which model a subagent used.
+ * The runtime's `subagent/start` event only carries the transport provider
+ * name, never the resolved LLM model.
+ */
+export function emitRunRoute(
+  ctx: DefaultRouteSeamContext,
+  payload: {
+    childId: string
+    provider?: string | undefined
+    model?: string | undefined
+    reasoningEffort?: string | undefined
+  },
+): void {
+  const events = ctx.events
+  if (events === undefined) return
+  const callbacks = events.dispatch('emit', [
+    'dsh-subagent-pro/run-route',
+    payload,
+  ]) as Array<(p: typeof payload) => void>
+  for (const cb of callbacks) cb(payload)
+}
+
+/** Extract the child session id from the run handle any start path returns. */
+function runChildId(run: unknown): string | undefined {
+  if (typeof run !== 'object' || run === null) return undefined
+  // `start` returns SubagentRun `{ id }`; `startContinuable` returns
+  // ContinuableStart `{ childId }`.
+  const id = (run as { id?: unknown }).id ?? (run as { childId?: unknown }).childId
+  return id === undefined ? undefined : String(id)
 }
 
 export function applyDefaultRouteSeam(
@@ -72,7 +108,20 @@ export function applyDefaultRouteSeam(
           name +
           ' subagent',
       )
-      return originalStart.call(subagents, name, { ...request, agentOptions })
+      const run = originalStart.call(subagents, name, { ...request, agentOptions })
+      // Surface the resolved route for the panel even though the built-in
+      // subagent tools don't go through our delegation tool.
+      void Promise.resolve(run).then((resolved) => {
+        const childId = runChildId(resolved)
+        if (childId !== undefined) {
+          emitRunRoute(ctx, {
+            childId,
+            provider: agentOptions.provider,
+            model: agentOptions.model,
+          })
+        }
+      })
+      return run
     }
     return originalStart.call(subagents, name, request)
   }
@@ -87,7 +136,18 @@ export function applyDefaultRouteSeam(
           agentOptions.model +
           ' to continuable subagent',
       )
-      return originalStartContinuable.call(subagents, { ...spec, request: { ...spec.request, agentOptions } })
+      const run = originalStartContinuable.call(subagents, { ...spec, request: { ...spec.request, agentOptions } })
+      void Promise.resolve(run).then((resolved) => {
+        const childId = runChildId(resolved)
+        if (childId !== undefined) {
+          emitRunRoute(ctx, {
+            childId,
+            provider: agentOptions.provider,
+            model: agentOptions.model,
+          })
+        }
+      })
+      return run
     }
     return originalStartContinuable.call(subagents, spec)
   }

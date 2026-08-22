@@ -39,3 +39,8 @@ pnpm-workspace.yaml
 # Reference repos cloned for development (not shipped with the plugin)
 refs/
 .scratch/
+
+# Session-local tooling caches / visualization drafts / pack artifacts
+.dsh-vision-toolkit/
+viz/
+*.tgz

@@ -10,13 +10,19 @@
  *     dsh-settings seam).
  *
  * Settings write goes through RolesService.mutate (dsh-settings seam). The host
- * apply() listens to settings/change and re-broadcasts; this UI simply re-reads
- * the namespace on every mount and after each successful mutate.
+ * apply() listens to `settings/updated` and re-reads the source via the live
+ * `installSettingsSection` getter; this UI simply re-reads the namespace on
+ * every mount and after each successful mutate.
  */
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 
-import { getRolesService } from './store'
+import {
+  getSettingsService,
+  type LlmModelInfo,
+  type LlmProviderInfo,
+  type LlmReasoningEffortInfo,
+} from './store'
 
 // ---- wire types (mirror host) ----
 
@@ -41,20 +47,15 @@ interface SubagentProSection {
 
 // ---- helpers ----
 
-const NS = 'subagent-pro'
-
-function readSection(): SubagentProSection {
-  const svc = getRolesService()
-  if (svc === undefined) return {}
+async function readSectionAsync(): Promise<{ section: SubagentProSection; revision: number }> {
+  const svc = getSettingsService()
+  if (svc === undefined) return { section: {}, revision: 0 }
   try {
-    const descriptors = svc.describe({ redactSecrets: true })
-    for (const d of descriptors) {
-      if (d.ns === NS) return (d.value as SubagentProSection) ?? {}
-    }
+    const { view, revision } = await svc.read()
+    return { section: (view as SubagentProSection) ?? {}, revision }
   } catch {
-    /* swallow */
+    return { section: {}, revision: 0 }
   }
-  return {}
 }
 
 // ---- main section ----
@@ -62,22 +63,36 @@ function readSection(): SubagentProSection {
 type Props = PropsRuntime<'root'>
 
 export function RoleEditorSection(_props: Props): ReactElement {
-  const svc = getRolesService()
-  const [section, setSection] = useState<SubagentProSection>(() => readSection())
+  const svc = getSettingsService()
+  const [section, setSection] = useState<SubagentProSection>({})
+  const [revision, setRevision] = useState(0)
+  const [available, setAvailable] = useState(svc !== undefined)
   const [savedFlag, setSavedFlag] = useState<Record<string, boolean>>({})
   const [busy, setBusy] = useState(false)
 
+  const refresh = useMemo(
+    () => async (): Promise<void> => {
+      if (svc === undefined) return
+      const { section: next, revision: rev } = await readSectionAsync()
+      setSection(next)
+      setRevision(rev)
+      setAvailable(true)
+    },
+    [svc],
+  )
+
   useEffect(() => {
-    // Re-read on mount and on a window-level settings-changed event (host fires
-    // settings/change; we re-read on visibility for safety).
-    const refresh = (): void => setSection(readSection())
-    window.addEventListener('focus', refresh)
-    document.addEventListener('visibilitychange', refresh)
-    return () => {
-      window.removeEventListener('focus', refresh)
-      document.removeEventListener('visibilitychange', refresh)
+    void refresh()
+    const onFocus = (): void => {
+      void refresh()
     }
-  }, [])
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onFocus)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onFocus)
+    }
+  }, [refresh])
 
   const flashSaved = (key: string): void => {
     setSavedFlag((prev) => ({ ...prev, [key]: true }))
@@ -90,86 +105,81 @@ export function RoleEditorSection(_props: Props): ReactElement {
     }, 1500)
   }
 
-  const updateField = async (path: string, value: unknown): Promise<void> => {
+  const doMutate = async (
+    ops: ReadonlyArray<{ path: readonly string[]; op: 'set' | 'unset'; value?: unknown }>,
+    flashKey: string,
+  ): Promise<void> => {
     if (svc === undefined) return
     setBusy(true)
     try {
-      await svc.mutate(NS, [{ path, op: 'set', value }])
-      flashSaved(path)
-      setSection(readSection())
+      const result = await svc.mutate(ops, revision)
+      setSection((result.view as SubagentProSection) ?? {})
+      setRevision(result.revision)
+      flashSaved(flashKey)
+    } catch (e) {
+      // Conflict → re-read and show a brief error flag
+      const msg = e instanceof Error ? e.message : String(e)
+      // eslint-disable-next-line no-console
+      console.error('[dsh-subagent-pro] settings mutate failed:', msg)
+      // Re-read to recover from any drift
+      try {
+        const { section: next, revision: rev } = await readSectionAsync()
+        setSection(next)
+        setRevision(rev)
+      } catch {
+        /* ignore */
+      }
     } finally {
       setBusy(false)
     }
   }
 
+  const updateField = (path: ReadonlyArray<string>, value: unknown): Promise<void> =>
+    doMutate([{ path, op: 'set', value }], path.join('.'))
+
   const addRole = async (): Promise<void> => {
-    if (svc === undefined) return
     const id = 'role-' + Date.now().toString(36)
     const newRole: RoleTemplate = {
       displayName: '新角色',
       description: '请填写角色的职责描述',
     }
-    setBusy(true)
-    try {
-      await svc.mutate(NS, [{ path: 'roles.' + id, op: 'set', value: newRole }])
-      flashSaved('roles.' + id)
-      setSection(readSection())
-    } finally {
-      setBusy(false)
-    }
+    await doMutate([{ path: ['roles', id], op: 'set', value: newRole }], 'roles.' + id)
   }
 
-  const removeRole = async (id: string): Promise<void> => {
-    if (svc === undefined) return
-    setBusy(true)
-    try {
-      await svc.mutate(NS, [{ path: 'roles.' + id, op: 'unset' }])
-      flashSaved('roles.' + id)
-      setSection(readSection())
-    } finally {
-      setBusy(false)
-    }
-  }
+  const removeRole = (id: string): Promise<void> =>
+    doMutate([{ path: ['roles', id], op: 'unset' }], 'roles.' + id)
 
-  const updateRoleField = async (
+  const updateRoleField = (
     id: string,
     field: keyof RoleTemplate,
     value: unknown,
-  ): Promise<void> => {
-    if (svc === undefined) return
-    setBusy(true)
-    try {
-      await svc.mutate(NS, [
-        { path: 'roles.' + id + '.' + field, op: 'set', value },
-      ])
-      flashSaved('roles.' + id + '.' + field)
-      setSection(readSection())
-    } finally {
-      setBusy(false)
-    }
-  }
+  ): Promise<void> =>
+    doMutate(
+      [{ path: ['roles', id, field], op: 'set', value }],
+      'roles.' + id + '.' + field,
+    )
 
   return (
     <div className="dsp-section">
       <div className="dsp-section-header">
         Subagent Pro
         <span className="dsp-section-meta">
-          {svc === undefined
-            ? '（设置服务不可用，仅展示）'
+          {!available
+            ? '（设置 bridge 未加载，仅展示）'
             : busy
               ? '（保存中…）'
               : '（设置命名空间 subagent-pro）'}
         </span>
       </div>
 
-      <DefaultCard section={section} onChange={updateField} saved={savedFlag} disabled={svc === undefined} />
+      <DefaultCard section={section} onChange={updateField} saved={savedFlag} disabled={!available} />
 
       <RolesCard
         section={section}
         onAdd={addRole}
         onRemove={removeRole}
         onUpdate={updateRoleField}
-        disabled={svc === undefined}
+        disabled={!available}
       />
     </div>
   )
@@ -179,66 +189,286 @@ export function RoleEditorSection(_props: Props): ReactElement {
 
 interface DefaultCardProps {
   section: SubagentProSection
-  onChange(path: string, value: unknown): Promise<void>
+  onChange(path: ReadonlyArray<string>, value: unknown): Promise<void>
   saved: Record<string, boolean>
   disabled: boolean
 }
 
 function DefaultCard({ section, onChange, saved, disabled }: DefaultCardProps): ReactElement {
-  const fields: ReadonlyArray<{
-    key: keyof SubagentProSection
-    label: string
-    placeholder: string
-    type: 'text' | 'role-select'
-  }> = [
-    { key: 'defaultProvider', label: '默认 provider', placeholder: '例：deepseek-official', type: 'text' },
-    { key: 'defaultModel', label: '默认 model', placeholder: '例：deepseek-chat', type: 'text' },
-    { key: 'defaultReasoningEffort', label: '默认 reasoningEffort', placeholder: 'low / medium / high', type: 'text' },
-    { key: 'defaultRole', label: '默认 role', placeholder: '（不设置）', type: 'role-select' },
-  ]
+  const svc = getSettingsService()
+  const [providers, setProviders] = useState<LlmProviderInfo[]>([])
+  const [models, setModels] = useState<LlmModelInfo[]>([])
+  const [llmLoadFailed, setLlmLoadFailed] = useState(false)
+  const currentProvider = section.defaultProvider ?? ''
+  const currentModel = section.defaultModel ?? ''
+
+  // Fetch providers list once on mount.
+  useEffect(() => {
+    if (svc === undefined) return
+    let cancelled = false
+    void svc.listProviders().then(
+      (p) => {
+        if (!cancelled) {
+          setProviders(p)
+          setLlmLoadFailed(false)
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setProviders([])
+          setLlmLoadFailed(true)
+        }
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [svc])
+
+  // Fetch models when provider changes.
+  useEffect(() => {
+    if (svc === undefined) return
+    if (currentProvider === '') {
+      setModels([])
+      return
+    }
+    let cancelled = false
+    void svc.listModels(currentProvider).then(
+      (m) => {
+        if (!cancelled) setModels(m)
+      },
+      () => {
+        if (!cancelled) setModels([])
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [svc, currentProvider])
+
+  const roleEntries = Object.entries(section.roles ?? {})
+
   return (
     <div className="dsp-card">
       <div className="dsp-card-head">
         <span className="dsp-card-title">默认委派</span>
         <span className="dsp-card-source settings">settings</span>
       </div>
-      {fields.map((f) => {
-        const path = f.key
-        const value = (section[f.key] as string | undefined) ?? ''
-        const isSaved = saved[path] === true
-        return (
-          <div key={path} className="dsp-field-row">
-            <label>{f.label}</label>
-            {f.type === 'role-select' ? (
-              <select
-                value={value}
-                disabled={disabled}
-                onChange={(e) => {
-                  void onChange(path, e.target.value === '' ? null : e.target.value)
-                }}
-              >
-                <option value="">（不设置）</option>
-                {Object.entries(section.roles ?? {}).map(([id, role]) => (
-                  <option key={id} value={id}>
-                    {id} — {role.displayName}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                type="text"
-                value={value}
-                placeholder={f.placeholder}
-                disabled={disabled}
-                onChange={(e) => {
-                  void onChange(path, e.target.value === '' ? null : e.target.value)
-                }}
-              />
-            )}
-            {isSaved ? <span className="dsp-card-meta">已保存</span> : null}
-          </div>
-        )
-      })}
+
+      {/* provider */}
+      <div className="dsp-field-row">
+        <label>默认 provider</label>
+        {providers.length > 0 ? (
+          <select
+            value={currentProvider}
+            disabled={disabled}
+            onChange={(e) => {
+              const next = e.target.value
+              // Switching provider → clear model and reasoning so the saved
+              // value still matches the new provider's model list.
+              void (async (): Promise<void> => {
+                await onChange(['defaultProvider'], next === '' ? null : next)
+                if (next !== currentProvider) {
+                  await onChange(['defaultModel'], null)
+                  await onChange(['defaultReasoningEffort'], null)
+                }
+              })()
+            }}
+          >
+            <option value="">（不设置）</option>
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} ({p.id})
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            value={currentProvider}
+            placeholder={llmLoadFailed ? 'LLM 信息获取失败，手动输入' : '例：deepseek-official'}
+            disabled={disabled}
+            onChange={(e) => {
+              void onChange(['defaultProvider'], e.target.value === '' ? null : e.target.value)
+            }}
+          />
+        )}
+        <span className="dsp-card-meta">
+          {saved['defaultProvider'] === true ? '已保存' : ''}
+        </span>
+      </div>
+
+      {/* model (depends on provider) */}
+      <div className="dsp-field-row">
+        <label>默认 model</label>
+        {currentProvider !== '' && models.length > 0 ? (
+          <select
+            value={section.defaultModel ?? ''}
+            disabled={disabled}
+            onChange={(e) => {
+              const next = e.target.value
+              void (async (): Promise<void> => {
+                await onChange(['defaultModel'], next === '' ? null : next)
+                // Switching model may invalidate reasoningEffort
+                await onChange(['defaultReasoningEffort'], null)
+              })()
+            }}
+          >
+            <option value="">（不设置）</option>
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name} ({m.id})
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            value={section.defaultModel ?? ''}
+            placeholder={
+              currentProvider === ''
+                ? '（先选 provider）'
+                : llmLoadFailed
+                  ? 'LLM 信息获取失败，手动输入'
+                  : '例：deepseek-chat'
+            }
+            disabled={disabled}
+            onChange={(e) => {
+              void onChange(['defaultModel'], e.target.value === '' ? null : e.target.value)
+            }}
+          />
+        )}
+        <span className="dsp-card-meta">{saved['defaultModel'] === true ? '已保存' : ''}</span>
+      </div>
+
+      {/* reasoningEffort (depends on model capabilities) */}
+      <ReasoningField
+        path={['defaultReasoningEffort']}
+        providerId={currentProvider}
+        modelId={currentModel}
+        value={section.defaultReasoningEffort}
+        disabled={disabled}
+        onChange={onChange}
+        saved={saved['defaultReasoningEffort'] === true}
+      />
+
+      {/* role */}
+      <div className="dsp-field-row">
+        <label>默认 role</label>
+        <select
+          value={section.defaultRole ?? ''}
+          disabled={disabled}
+          onChange={(e) => {
+            void onChange(['defaultRole'], e.target.value === '' ? null : e.target.value)
+          }}
+        >
+          <option value="">（不设置）</option>
+          {roleEntries.map(([id, role]) => (
+            <option key={id} value={id}>
+              {id} — {role.displayName}
+            </option>
+          ))}
+        </select>
+        <span className="dsp-card-meta">{saved['defaultRole'] === true ? '已保存' : ''}</span>
+      </div>
+    </div>
+  )
+}
+
+/** Reasoning-effort field: dropdown only if the selected model advertises the capability. */
+function ReasoningField(props: {
+  path: ReadonlyArray<string>
+  providerId: string
+  modelId: string
+  value: string | undefined
+  disabled: boolean
+  onChange(path: ReadonlyArray<string>, value: unknown): Promise<void>
+  saved: boolean
+}): ReactElement {
+  const { providerId, modelId, value, disabled, onChange, path, saved } = props
+  const svc = getSettingsService()
+  const [efforts, setEfforts] = useState<LlmReasoningEffortInfo[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
+
+  useEffect(() => {
+    if (svc === undefined) return
+    if (providerId === '' || modelId === '') {
+      setEfforts([])
+      setLoaded(true)
+      return
+    }
+    let cancelled = false
+    setLoaded(false)
+    void svc.listReasoningEfforts(providerId, modelId).then(
+      (e) => {
+        if (!cancelled) {
+          setEfforts(e)
+          setLoaded(true)
+          setLoadFailed(false)
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setEfforts([])
+          setLoaded(true)
+          setLoadFailed(true)
+        }
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [svc, providerId, modelId])
+
+  const showDropdown = loaded && efforts.length > 0
+  const showFallbackInput = loaded && efforts.length === 0
+
+  return (
+    <div className="dsp-field-row">
+      <label>默认 reasoningEffort</label>
+      {showDropdown ? (
+        <select
+          value={value ?? ''}
+          disabled={disabled}
+          onChange={(e) => {
+            void onChange(path, e.target.value === '' ? null : e.target.value)
+          }}
+        >
+          <option value="">（不设置）</option>
+          {efforts.map((eff) => (
+            <option key={eff.id} value={eff.id}>
+              {eff.name}
+            </option>
+          ))}
+        </select>
+      ) : showFallbackInput ? (
+        <input
+          type="text"
+          value={value ?? ''}
+          placeholder={
+            loadFailed
+              ? 'reasoningEffort 解析失败，手动输入'
+              : '（当前模型未声明 reasoningEffort）'
+          }
+          disabled={disabled}
+          onChange={(e) => {
+            void onChange(path, e.target.value === '' ? null : e.target.value)
+          }}
+        />
+      ) : (
+        <input
+          type="text"
+          value={value ?? ''}
+          placeholder={
+            providerId === '' || modelId === ''
+              ? '（先选 model）'
+              : '加载中…'
+          }
+          disabled
+        />
+      )}
+      <span className="dsp-card-meta">{saved ? '已保存' : ''}</span>
     </div>
   )
 }
@@ -307,7 +537,49 @@ interface RoleCardProps {
   disabled: boolean
 }
 
-function RoleCard({ id, role, onRemove, onUpdate, disabled }: RoleCardProps): ReactElement {
+function RoleCard(props: RoleCardProps): ReactElement {
+  const { id, role, onRemove, onUpdate, disabled } = props
+  const svc = getSettingsService()
+  const [providers, setProviders] = useState<LlmProviderInfo[]>([])
+  const [models, setModels] = useState<LlmModelInfo[]>([])
+  const roleProvider = role.provider ?? ''
+
+  useEffect(() => {
+    if (svc === undefined) return
+    let cancelled = false
+    void svc.listProviders().then(
+      (p) => {
+        if (!cancelled) setProviders(p)
+      },
+      () => {
+        if (!cancelled) setProviders([])
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [svc])
+
+  useEffect(() => {
+    if (svc === undefined) return
+    if (roleProvider === '') {
+      setModels([])
+      return
+    }
+    let cancelled = false
+    void svc.listModels(roleProvider).then(
+      (m) => {
+        if (!cancelled) setModels(m)
+      },
+      () => {
+        if (!cancelled) setModels([])
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [svc, roleProvider])
+
   return (
     <div className="dsp-card" style={{ background: 'transparent' }}>
       <div className="dsp-card-head">
@@ -359,30 +631,87 @@ function RoleCard({ id, role, onRemove, onUpdate, disabled }: RoleCardProps): Re
           }}
         />
       </div>
+      {/* provider */}
       <div className="dsp-field-row">
         <label>provider</label>
-        <input
-          type="text"
-          value={role.provider ?? ''}
-          placeholder="（继承）"
-          disabled={disabled}
-          onChange={(e) => {
-            void onUpdate(id, 'provider', e.target.value === '' ? null : e.target.value)
-          }}
-        />
+        {providers.length > 0 ? (
+          <select
+            value={roleProvider}
+            disabled={disabled}
+            onChange={(e) => {
+              const next = e.target.value
+              void (async (): Promise<void> => {
+                await onUpdate(id, 'provider', next === '' ? null : next)
+                if (next !== roleProvider) {
+                  await onUpdate(id, 'model', null)
+                  await onUpdate(id, 'reasoningEffort', null)
+                }
+              })()
+            }}
+          >
+            <option value="">（继承）</option>
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} ({p.id})
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            value={roleProvider}
+            placeholder="（继承）"
+            disabled={disabled}
+            onChange={(e) => {
+              void onUpdate(id, 'provider', e.target.value === '' ? null : e.target.value)
+            }}
+          />
+        )}
       </div>
+      {/* model */}
       <div className="dsp-field-row">
         <label>model</label>
-        <input
-          type="text"
-          value={role.model ?? ''}
-          placeholder="（继承）"
-          disabled={disabled}
-          onChange={(e) => {
-            void onUpdate(id, 'model', e.target.value === '' ? null : e.target.value)
-          }}
-        />
+        {roleProvider !== '' && models.length > 0 ? (
+          <select
+            value={role.model ?? ''}
+            disabled={disabled}
+            onChange={(e) => {
+              const next = e.target.value
+              void (async (): Promise<void> => {
+                await onUpdate(id, 'model', next === '' ? null : next)
+                await onUpdate(id, 'reasoningEffort', null)
+              })()
+            }}
+          >
+            <option value="">（继承）</option>
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name} ({m.id})
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            value={role.model ?? ''}
+            placeholder={roleProvider === '' ? '（先选 provider）' : '（继承）'}
+            disabled={disabled}
+            onChange={(e) => {
+              void onUpdate(id, 'model', e.target.value === '' ? null : e.target.value)
+            }}
+          />
+        )}
       </div>
+      {/* reasoningEffort */}
+      <ReasoningField
+        path={['roles', id, 'reasoningEffort']}
+        providerId={roleProvider}
+        modelId={role.model ?? ''}
+        value={role.reasoningEffort}
+        disabled={disabled}
+        onChange={(p, v) => onUpdate(id, p[p.length - 1] as keyof RoleTemplate, v)}
+        saved={false}
+      />
       <div className="dsp-field-row">
         <label>tools (allow)</label>
         <input

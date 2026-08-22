@@ -11,6 +11,7 @@
 - **Live subagent panel** — listens to `subagent/start` and `subagent/end` events, attributes runs to their root session via the parent chain; up to 200 rows per root; browser polls `/api/dsh-subagent-pro/snapshot` once per second; status dots follow the official StateDot spec (running = pixel-art chase, terminal = solid + 10% same-color halo).
 - **HUD-style icon button** — 28×28 linear SVG icon injected into the `conversation.input.left` slot; top-right warn-yellow badge shows the running-subagent count; matches the official interaction color tokens.
 - **Role-based routing** — registers the `subagent_role` tool with a four-layer fallback (call > role > default > inherit); persona and toolFilter flow into `SubagentStartRequest`; foreground / one-shot background / continuable background execution modes.
+- **LLM route self-introspection** — registers the `subagent_providers` tool so the main agent can query the host `llm` service for available providers, models, and reasoning-effort levels (same source as the settings-panel dropdowns); agents do not need to hard-code model ids.
 - **Default model fallback** — once `defaultProvider`/`defaultModel` are configured, any subagent started without explicit `agentOptions` (including built-in `subagent`/`subagent_fork`) automatically uses the default; an un-routable default provider silently falls back to the parent model.
 - **Claude Code style agent md** — scans `~/.dsh/agents/*.md` (global) and `<cwd>/.dsh/agents/*.md` (project); frontmatter fields map to RoleTemplate; the body becomes the persona injected into the subagent.
 - **Role precedence** — project md > global md > settings.roles; all three coexist in the main-agent guidance; delegate by role id (kebab-case file basename).
@@ -65,6 +66,23 @@ subagent_role({ role: "code-reviewer", model: "deepseek-chat", prompt: "..." })
 ### Role delegation (agent md)
 
 Drop a `.md` file under `~/.dsh/agents/` (global) or `<project>/.dsh/agents/` (project). The main agent picks it up on the next settings change and the persona is injected into every subagent started with that role id.
+
+### Discover available models (`subagent_providers`)
+
+The main agent can call `subagent_providers` at any time to inspect the host `llm` service for routable providers, models, and reasoning-effort levels — no restart or config-file read required:
+
+```text
+subagent_providers({ action: "list_providers" })
+// -> { kind: "providers", providers: [{ id: "minimax-cn", name: "minimax-cn" }, ...] }
+
+subagent_providers({ action: "list_models", provider: "opencode-go" })
+// -> { kind: "models", provider: "opencode-go", models: [{ id: "deepseek-v4-flash", ... }] }
+
+subagent_providers({ action: "list_reasoning_efforts", provider: "opencode-go", model: "deepseek-v4-flash" })
+// -> { kind: "reasoning", efforts: [...], defaultEffort: "low" }
+```
+
+The data source is the same as the settings-panel dropdowns (`/api/dsh-subagent-pro/llm/*`). If the `llm` service is unavailable the tool returns empty arrays instead of throwing.
 
 ## Roles
 
