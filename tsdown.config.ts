@@ -64,8 +64,10 @@ const clientHalf: UserConfig = {
   sourcemap: true,
   clean: false,
   dts: false,
-  external: PLATFORM_MODULES,
-  noExternal: (id: string) => (PLATFORM_MODULES.includes(id) ? undefined : true),
+  deps: {
+    neverBundle: PLATFORM_MODULES,
+    alwaysBundle: (id: string) => (PLATFORM_MODULES.includes(id) ? undefined : true),
+  },
   define: {
     'process.env.NODE_ENV': JSON.stringify('production'),
     'import.meta.env.MODE': JSON.stringify('production'),

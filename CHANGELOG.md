@@ -2,6 +2,12 @@
 
 All notable changes to `dsh-subagent-pro` are recorded here. Format follows Keep a Changelog.
 
+## [Unreleased]
+
+### Changed
+
+- tsdown: migrate `clientHalf` from deprecated `external` / `noExternal` to `deps.neverBundle` / `deps.alwaysBundle`; build output byte-equivalent, removes two deprecation warnings.
+
 ## [0.1.0] - 2026-08-20
 
 ### Added (首发合并版本)
