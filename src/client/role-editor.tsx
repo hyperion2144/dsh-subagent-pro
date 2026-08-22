@@ -202,6 +202,8 @@ function DefaultCard({ section, onChange, saved, disabled }: DefaultCardProps): 
   const [providers, setProviders] = useState<LlmProviderInfo[]>([])
   const [models, setModels] = useState<LlmModelInfo[]>([])
   const [llmLoadFailed, setLlmLoadFailed] = useState(false)
+  const [fileRoles, setFileRoles] = useState<FileRoleInfo[]>([])
+  const [fileRolesLoadFailed, setFileRolesLoadFailed] = useState(false)
   const currentProvider = section.defaultProvider ?? ''
   const currentModel = section.defaultModel ?? ''
 
@@ -220,6 +222,32 @@ function DefaultCard({ section, onChange, saved, disabled }: DefaultCardProps): 
         if (!cancelled) {
           setProviders([])
           setLlmLoadFailed(true)
+        }
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [svc])
+
+  // File-backed roles (every registered workspace + global .dsh/agents/*.md) so
+  // the `defaultRole` dropdown can list them alongside settings.roles. Same
+  // fetch surface as `MdRolesCard` — fetched independently because DefaultCard
+  // may render before MdRolesCard mounts (and vice versa).
+  useEffect(() => {
+    if (svc === undefined) return
+    let cancelled = false
+    void svc.listFileRoles().then(
+      (r) => {
+        if (!cancelled) {
+          setFileRoles(r)
+          setFileRolesLoadFailed(false)
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setFileRoles([])
+          setFileRolesLoadFailed(true)
         }
       },
     )
@@ -355,7 +383,12 @@ function DefaultCard({ section, onChange, saved, disabled }: DefaultCardProps): 
         saved={saved['defaultReasoningEffort'] === true}
       />
 
-      {/* role */}
+      {/* role — merge settings.roles + agent-md roles (project / global) in
+          a single dropdown so the user can pick any role the runtime can
+          resolve. md ids collide with settings.roles only by convention —
+          project-wins precedence already happens server-side in
+          resolveRoute / the default seam, so the dropdown just needs to
+          offer every legal choice. */}
       <div className="dsp-field-row">
         <label>默认 role</label>
         <select
@@ -366,13 +399,45 @@ function DefaultCard({ section, onChange, saved, disabled }: DefaultCardProps): 
           }}
         >
           <option value="">（不设置）</option>
-          {roleEntries.map(([id, role]) => (
-            <option key={id} value={id}>
-              {id} — {role.displayName}
-            </option>
-          ))}
+          {fileRoles.filter((r) => r.source === 'project-md').length > 0 ? (
+            <optgroup label="项目 agent md">
+              {fileRoles
+                .filter((r) => r.source === 'project-md')
+                .map((r) => (
+                  <option key={'md-project-' + r.id} value={r.id}>
+                    {r.id} — {r.displayName}
+                  </option>
+                ))}
+            </optgroup>
+          ) : null}
+          {fileRoles.filter((r) => r.source === 'global-md').length > 0 ? (
+            <optgroup label="全局 agent md">
+              {fileRoles
+                .filter((r) => r.source === 'global-md')
+                .map((r) => (
+                  <option key={'md-global-' + r.id} value={r.id}>
+                    {r.id} — {r.displayName}
+                  </option>
+                ))}
+            </optgroup>
+          ) : null}
+          {roleEntries.length > 0 ? (
+            <optgroup label="设置">
+              {roleEntries.map(([id, role]) => (
+                <option key={'set-' + id} value={id}>
+                  {id} — {role.displayName}
+                </option>
+              ))}
+            </optgroup>
+          ) : null}
         </select>
-        <span className="dsp-card-meta">{saved['defaultRole'] === true ? '已保存' : ''}</span>
+        <span className="dsp-card-meta">
+          {saved['defaultRole'] === true
+            ? '已保存'
+            : fileRolesLoadFailed
+              ? '（file roles 加载失败）'
+              : ''}
+        </span>
       </div>
     </div>
   )
