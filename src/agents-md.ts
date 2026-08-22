@@ -1,10 +1,20 @@
 /**
  * Agent md loader — Claude Code style .md subagent definitions.
+ *
+ * Reads role definitions from two sources:
+ *   1. Global: `${globalAgentDir}/*.md` (default `~/.dsh/agents/`)
+ *   2. Project: `${workspace.path}/${projectDirName}/*.md` for every registered
+ *      workspace (`ctx.workspaceRegistry.list()`) — host injects the registry
+ *      in web profiles, so the panel sees one entry per opened project.
+ *
+ * Roles are merged into a single deduped list keyed by id (filename). When the
+ * same id appears in both layers the **project** version wins (displayName,
+ * description, persona, provider, model, reasoningEffort, toolFilter) — and
+ * every layer that contributed is recorded on `altPaths[]` so the panel can
+ * render an `also: 全局/项目` chip without losing the global copy.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-
-import type { MergedRole } from './settings.js'
 
 const MD_EXT = '.md'
 const KEBAB_CASE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
@@ -15,6 +25,32 @@ interface FrontmatterShape {
   tools?: string
   model?: string
   [key: string]: unknown
+}
+
+/** Local mirror of {@link RoleTemplate} from route-resolver — duplicated here
+ *  so this module has no `settings.js` import (it feeds `settings.js`, not
+ *  the other way around). The shape is identical so callers can cast. */
+export interface RoleTemplate {
+  displayName: string
+  description: string
+  persona?: string
+  provider?: string
+  model?: string
+  reasoningEffort?: string
+  toolFilter?: { allow?: string[]; deny?: string[] }
+}
+
+export type RoleSource = 'project-md' | 'global-md' | 'settings'
+
+/** Local mirror of {@link MergedRole} from settings — same shape, kept
+ *  standalone so this module's tests don't pull in the cordis boot graph.
+ *  `altPaths` / `isOverride` are only set by `mergeRoles` when both layers
+ *  define the same id (project always wins). */
+export interface MergedRole extends RoleTemplate {
+  source: RoleSource
+  filePath?: string
+  altPaths?: string[]
+  isOverride?: boolean
 }
 
 interface ParsedAgentMd {
@@ -35,6 +71,11 @@ export interface AgentMdHandle {
   projectDirName: string
   resolveProjectDir(cwd: string | undefined): string | undefined
   load(cwd: string | undefined): AgentMdLoadResult
+}
+
+/** Loose shape of the host workspace registry entry we depend on. */
+interface WorkspaceEntryLike {
+  path?: string
 }
 
 function isKebabCase(s: string): boolean {
@@ -204,6 +245,39 @@ function scanDir(
   return { roles, warnings }
 }
 
+/**
+ * Merge roles from every contributing layer. Project always wins; the global
+ * copy is preserved on `altPaths` so the UI can show `also: 全局` without
+ * losing it. The `isOverride` flag tells the panel when project overrode
+ * a same-named global (so the panel can label the role "项目" and add the
+ * alt chip).
+ */
+function mergeRoles(globalRoles: MergedRole[], projectRoles: MergedRole[]): MergedRole[] {
+  const idFromPath = (filePath: string | undefined): string => {
+    if (filePath === undefined || filePath === '') return ''
+    return stripMdExt(lastSegment(filePath))
+  }
+  const byId = new Map<string, MergedRole>()
+  for (const g of globalRoles) {
+    const id = idFromPath(g.filePath)
+    if (id === '') continue
+    byId.set(id, g)
+  }
+  for (const p of projectRoles) {
+    const id = idFromPath(p.filePath)
+    if (id === '') continue
+    const existing = byId.get(id)
+    const projectRole: MergedRole = {
+      ...p,
+      ...(existing !== undefined ? { altPaths: [existing.filePath ?? ''].filter((s) => s !== '') } : {}),
+      source: 'project-md',
+      ...(existing !== undefined ? { isOverride: true } : {}),
+    }
+    byId.set(id, projectRole)
+  }
+  return [...byId.values()]
+}
+
 export function loadAgentMdRoles(
   globalDir: string,
   projectDirName: string,
@@ -215,15 +289,60 @@ export function loadAgentMdRoles(
   const load = (cwd: string | undefined): AgentMdLoadResult => {
     const globalScan = scanDir(globalDir, 'global-md')
     const projectScan = scanDir(resolveProjectDir(cwd), 'project-md')
-    const byId = new Map<string, MergedRole>()
-    for (const r of globalScan.roles) byId.set(r.filePath ?? '', r)
-    for (const r of projectScan.roles) byId.set(r.filePath ?? '', r)
     return {
-      roles: [...byId.values()],
+      roles: mergeRoles(globalScan.roles, projectScan.roles),
       warnings: [...globalScan.warnings, ...projectScan.warnings],
     }
   }
   return { globalDir, projectDirName, resolveProjectDir, load }
+}
+
+/**
+ * Load agent md roles for every registered workspace in addition to the
+ * single project cwd path. Used by the host's `/api/dsh-subagent-pro/roles`
+ * bridge endpoint so the panel can render file-backed roles for **every**
+ * project the user has open, not just the current session's cwd.
+ *
+ * Tolerates an absent workspaceRegistry (headless / smoke without host spine):
+ * falls back to the current cwd only.
+ */
+export function loadAgentMdRolesAcrossWorkspaces(
+  ctx: unknown,
+  globalDir: string,
+  projectDirName: string,
+): AgentMdLoadResult {
+  const registry = (ctx as { workspaceRegistry?: { list?: () => WorkspaceEntryLike[] } })
+    .workspaceRegistry
+  const workspacePaths: string[] = []
+  if (registry?.list !== undefined) {
+    try {
+      for (const ws of registry.list()) {
+        if (typeof ws?.path === 'string' && ws.path !== '') {
+          workspacePaths.push(ws.path)
+        }
+      }
+    } catch {
+      /* fall through to empty */
+    }
+  }
+
+  const globalScan = scanDir(globalDir, 'global-md')
+  const projectRoles: MergedRole[] = []
+  const warnings: string[] = [...globalScan.warnings]
+  for (const wsPath of workspacePaths) {
+    const scan = scanDir(join(wsPath, projectDirName), 'project-md')
+    // Tag each role with its workspace path so the panel can show which
+    // workspace it came from when multiple projects are open.
+    for (const r of scan.roles) {
+      projectRoles.push({ ...r, filePath: r.filePath ?? '' })
+    }
+    warnings.push(...scan.warnings)
+  }
+
+  return {
+    roles: mergeRoles(globalScan.roles, projectRoles),
+    warnings,
+  }
 }
 
 export function refreshAgentMdRoles(
@@ -234,13 +353,10 @@ export function refreshAgentMdRoles(
 ): AgentMdLoadResult {
   const globalScan = scanDir(handle.globalDir, 'global-md')
   const projectScan = scanDir(handle.resolveProjectDir(cwd), 'project-md')
-  const byId = new Map<string, MergedRole>()
-  for (const r of globalScan.roles) byId.set(r.filePath ?? '', r)
-  for (const r of projectScan.roles) byId.set(r.filePath ?? '', r)
   return {
-    roles: [...byId.values()],
+    roles: mergeRoles(globalScan.roles, projectScan.roles),
     warnings: [...globalScan.warnings, ...projectScan.warnings],
   }
 }
 
-export const _internal = { parseFrontmatter, parseModel, parseTools, readOne, scanDir, isKebabCase, lastSegment, stripMdExt, fileIdFromPath }
+export const _internal = { parseFrontmatter, parseModel, parseTools, readOne, scanDir, isKebabCase, lastSegment, stripMdExt, fileIdFromPath, mergeRoles }

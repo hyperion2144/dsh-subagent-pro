@@ -7,10 +7,14 @@
  * headless profiles webServer is absent, so the main entry must keep working
  * there unchanged. Same pattern as dsh-plugin-subagent-director's bridge.
  *
- * Exposes a single prefix route at `/api/dsh-subagent-pro/settings` with two
- * endpoints (split by sub-path):
- *   - GET  `/api/dsh-subagent-pro/settings/view`    → current subagent-pro view
- *   - PATCH `/api/dsh-subagent-pro/settings/mutate`  → apply path ops
+ * Exposes a prefix route at `/api/dsh-subagent-pro/{settings,roles,llm}`:
+ *   - GET    `/api/dsh-subagent-pro/settings/view`     current subagent-pro view
+ *   - PATCH  `/api/dsh-subagent-pro/settings/mutate`   apply path ops
+ *   - GET    `/api/dsh-subagent-pro/roles`              file-backed roles from
+ *                                                        every registered workspace
+ *                                                        + global agent dir
+ *   - GET    `/api/dsh-subagent-pro/llm/{providers,models,reasoning-efforts}`
+ *                                                        host `llm` enumeration
  *
  * The wire shape is intentionally minimal (just `{ ok, view, revision }` or
  * `{ ok: false, error: { code, message } }`) and is consumed directly by
@@ -19,15 +23,21 @@
  * CORS: the prefix route is host-relative so the browser can call it directly
  * with `credentials: 'same-origin'`; no separate CORS layer required.
  */
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+
+import { loadAgentMdRolesAcrossWorkspaces } from './agents-md.js'
+
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 export const name = 'dsh-subagent-pro-bridge'
-export const inject = ['webServer', 'settings', 'llm']
+export const inject = ['webServer', 'settings', 'llm', 'workspaceRegistry']
 
 const NS = 'subagent-pro'
 const PREFIX = '/api/dsh-subagent-pro/settings'
 const LLM_PREFIX = '/api/dsh-subagent-pro/llm'
+const ROLES_PREFIX = '/api/dsh-subagent-pro/roles'
 
 interface ViewSuccess {
   ok: true
@@ -317,6 +327,39 @@ export function apply(ctx: Context): void {
         ok: false,
         error: { code: 'unknown-endpoint', message: endpoint },
       })
+    },
+  })
+
+  // Roles bridge: every registered workspace's .dsh/agents/*.md + global dir,
+  // merged with project-wins precedence. Read-only — agent-md files are owned
+  // by the user, not edited through this endpoint. Powers the read-only
+  // "角色（文件）" section in the role-editor UI.
+  webServer.register({
+    kind: 'prefix',
+    path: ROLES_PREFIX,
+    handler: async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.method !== 'GET') {
+        sendJson(res, 405, {
+          ok: false,
+          error: { code: 'method-not-allowed', message: req.method ?? 'GET' },
+        })
+        return
+      }
+      const globalDir = join(homedir(), '.dsh', 'agents')
+      const projectDirName = '.dsh/agents'
+      try {
+        const result = loadAgentMdRolesAcrossWorkspaces(ctx, globalDir, projectDirName)
+        sendJsonLlm(res, 200, {
+          ok: true,
+          roles: result.roles,
+          warnings: result.warnings,
+        })
+      } catch (e) {
+        sendJsonLlm(res, 500, {
+          ok: false,
+          error: { code: 'roles-error', message: e instanceof Error ? e.message : String(e) },
+        })
+      }
     },
   })
 }

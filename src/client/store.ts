@@ -163,6 +163,38 @@ export interface SettingsService {
   listModels(provider: string): Promise<LlmModelInfo[]>
   /** Selectable reasoning efforts for one (provider, model) route. */
   listReasoningEfforts(provider: string, model: string): Promise<LlmReasoningEffortInfo[]>
+  /** File-backed roles from every registered workspace + global agent dir. */
+  listFileRoles(): Promise<FileRoleInfo[]>
+}
+
+/**
+ * File-backed role entry returned by `/api/dsh-subagent-pro/roles` — built
+ * from every registered workspace's `.dsh/agents/*.md` plus the global
+ * `~/.dsh/agents/*.md` dir. `source` discriminates where the winning copy
+ * came from; `altPaths` is non-empty when a same-named file exists in the
+ * other layer(s) (project always wins — the panel renders an `also: 全局`
+ * chip when this is set).
+ */
+export interface FileRoleInfo {
+  /** Filename without `.md` (the role id). */
+  id: string
+  displayName: string
+  description: string
+  /** Persona body (frontmatter body after the closing ---). */
+  persona?: string
+  provider?: string
+  model?: string
+  reasoningEffort?: string
+  /** Optional allow-list from the `tools:` frontmatter field. */
+  toolFilter?: { allow?: string[] }
+  /** Source of the winning copy: 'project-md' | 'global-md'. */
+  source: 'project-md' | 'global-md'
+  /** Absolute path to the .md file that won the merge. */
+  filePath: string
+  /** Other layers where the same id was found (relative paths). */
+  altPaths: string[]
+  /** True when both project and global copies exist for this id. */
+  isOverride: boolean
 }
 
 /** Provider entry as returned by the LLM-info bridge endpoint. */

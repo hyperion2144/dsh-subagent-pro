@@ -21,6 +21,7 @@ import { STYLES } from './styles'
 import {
   setSessionsService,
   setSettingsService,
+  type FileRoleInfo,
   type LlmModelInfo,
   type LlmProviderInfo,
   type LlmReasoningEffortInfo,
@@ -37,11 +38,16 @@ const SETTINGS_MUTATE = '/api/dsh-subagent-pro/settings/mutate'
 const LLM_PROVIDERS = '/api/dsh-subagent-pro/llm/providers'
 const LLM_MODELS = '/api/dsh-subagent-pro/llm/models'
 const LLM_REASONING = '/api/dsh-subagent-pro/llm/reasoning-efforts'
+/** File-role bridge endpoint — every registered workspace's .dsh/agents/*.md
+ *  plus the global `~/.dsh/agents/*.md` directory, merged with project-wins
+ *  precedence. Powers the read-only "角色（文件）" section in the role editor. */
+const FILE_ROLES = '/api/dsh-subagent-pro/roles'
 
 function makeFetchSettingsService(): SettingsService & {
   listProviders(): Promise<LlmProviderInfo[]>
   listModels(provider: string): Promise<LlmModelInfo[]>
   listReasoningEfforts(provider: string, model: string): Promise<LlmReasoningEffortInfo[]>
+  listFileRoles(): Promise<FileRoleInfo[]>
 } {
   return {
     async read() {
@@ -102,6 +108,15 @@ function makeFetchSettingsService(): SettingsService & {
         | { ok: false; error: { code: string; message: string } }
       if (!data.ok) throw new Error(`llm reasoning-efforts failed: ${data.error.message}`)
       return data.efforts
+    },
+    async listFileRoles() {
+      const res = await fetch(FILE_ROLES, { credentials: 'same-origin' })
+      if (!res.ok) throw new Error(`file-roles HTTP ${res.status}`)
+      const data = (await res.json()) as
+        | { ok: true; roles: FileRoleInfo[]; warnings?: string[] }
+        | { ok: false; error: { code: string; message: string } }
+      if (!data.ok) throw new Error(`file-roles failed: ${data.error.message}`)
+      return data.roles
     },
   }
 }

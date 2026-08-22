@@ -19,6 +19,7 @@ import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 
 import {
   getSettingsService,
+  type FileRoleInfo,
   type LlmModelInfo,
   type LlmProviderInfo,
   type LlmReasoningEffortInfo,
@@ -173,6 +174,8 @@ export function RoleEditorSection(_props: Props): ReactElement {
       </div>
 
       <DefaultCard section={section} onChange={updateField} saved={savedFlag} disabled={!available} />
+
+      <MdRolesCard />
 
       <RolesCard
         section={section}
@@ -481,6 +484,145 @@ interface RolesCardProps {
   onRemove(id: string): Promise<void>
   onUpdate(id: string, field: keyof RoleTemplate, value: unknown): Promise<void>
   disabled: boolean
+}
+
+// ---- file-backed roles (read-only) ----
+
+/**
+ * Read-only section listing every role discovered on disk — global
+ * `~/.dsh/agents/*.md` plus every registered workspace's `.dsh/agents/*.md`.
+ * Source labels disambiguate project vs global; `isOverride` adds an
+ * `also: 全局/项目` chip when both layers define the same id (project wins).
+ * Locked icons mark these as file-owned (edit the .md to change).
+ */
+function MdRolesCard(): ReactElement | null {
+  const svc = getSettingsService()
+  const [roles, setRoles] = useState<FileRoleInfo[]>([])
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | undefined>()
+
+  const refresh = async (): Promise<void> => {
+    if (svc === undefined) return
+    setLoading(true)
+    setLoadError(undefined)
+    try {
+      const list = await svc.listFileRoles()
+      setRoles(list)
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e))
+      setRoles([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void refresh()
+  }, [svc]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (svc === undefined) return null
+
+  const projectRoles = roles.filter((r) => r.source === 'project-md')
+  const globalRoles = roles.filter((r) => r.source === 'global-md')
+
+  const renderRole = (r: FileRoleInfo): ReactElement => (
+    <div key={r.id} className="dsp-role-card dsp-role-card-md">
+      <div className="dsp-role-card-head">
+        <span className="dsp-role-card-title">{r.displayName}</span>
+        <span className={'dsp-role-source-chip dsp-role-source-' + r.source}>
+          {r.source === 'project-md' ? '项目' : '全局'}
+        </span>
+        {r.isOverride ? (
+          <span className="dsp-role-also-chip">
+            also: {r.source === 'project-md' ? '全局' : '项目'}
+          </span>
+        ) : null}
+        <svg
+          className="dsp-role-locked"
+          width="11"
+          height="11"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-label="只读"
+        >
+          <title>只读 — 修改请直接编辑 .md 文件</title>
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+        </svg>
+      </div>
+      <div className="dsp-role-card-path">{r.filePath}</div>
+      {r.description !== '' ? (
+        <div className="dsp-role-card-desc">{r.description}</div>
+      ) : null}
+      {r.persona !== undefined && r.persona !== '' ? (
+        <details className="dsp-role-card-persona-wrap">
+          <summary className="dsp-role-card-persona-summary">persona</summary>
+          <pre className="dsp-role-card-persona">{r.persona}</pre>
+        </details>
+      ) : null}
+      {r.provider !== undefined || r.model !== undefined ? (
+        <div className="dsp-role-card-meta">
+          {r.provider !== undefined ? <span>provider: {r.provider}</span> : null}
+          {r.model !== undefined ? <span>model: {r.model}</span> : null}
+          {r.reasoningEffort !== undefined ? <span>effort: {r.reasoningEffort}</span> : null}
+        </div>
+      ) : null}
+    </div>
+  )
+
+  return (
+    <div className="dsp-card dsp-card-md">
+      <div className="dsp-card-head">
+        <span className="dsp-card-title">角色（文件）</span>
+        <span className="dsp-card-meta">
+          来自 .dsh/agents/*.md · 只读（修改请直接编辑 .md 文件）
+        </span>
+      </div>
+
+      {loadError !== undefined ? (
+        <div className="dsp-card-meta dsp-role-error">
+          加载失败：{loadError}
+          <button className="dsp-btn" type="button" onClick={() => { void refresh() }}>
+            重试
+          </button>
+        </div>
+      ) : null}
+
+      {loading && roles.length === 0 ? (
+        <div className="dsp-card-meta">加载中…</div>
+      ) : null}
+
+      {!loading && !loadError && roles.length === 0 ? (
+        <div className="dsp-card-meta">
+          尚未在任何 .dsh/agents/*.md 中找到角色。在项目 <code>{'<workspace>'}/.dsh/agents/code-reviewer.md</code> 或全局 <code>~/.dsh/agents/code-reviewer.md</code> 写一份即出现。
+        </div>
+      ) : null}
+
+      {projectRoles.length > 0 ? (
+        <>
+          <div className="dsp-role-section-label">
+            <span className="dsp-role-section-dot dsp-role-section-dot-project" />
+            项目级
+          </div>
+          {projectRoles.map(renderRole)}
+        </>
+      ) : null}
+
+      {globalRoles.length > 0 ? (
+        <>
+          <div className="dsp-role-section-label">
+            <span className="dsp-role-section-dot dsp-role-section-dot-global" />
+            全局级
+          </div>
+          {globalRoles.map(renderRole)}
+        </>
+      ) : null}
+    </div>
+  )
 }
 
 function RolesCard({ section, onAdd, onRemove, onUpdate, disabled }: RolesCardProps): ReactElement {

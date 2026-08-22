@@ -1,11 +1,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import {
   _internal,
   fileIdFromPath,
   lastSegment,
   stripMdExt,
+  loadAgentMdRolesAcrossWorkspaces,
 } from '../agents-md.js'
 
 const { parseFrontmatter, parseModel, parseTools, isKebabCase } = _internal
@@ -79,4 +84,139 @@ test('parseTools splits whitespace', () => {
   assert.deepEqual(parseTools('Read'), ['Read'])
   assert.equal(parseTools(''), undefined)
   assert.equal(parseTools(undefined), undefined)
+})
+
+// ---- mergeRoles: project wins, altPaths records loser ----
+
+const { mergeRoles } = _internal
+
+test('mergeRoles: project always wins on the role payload', () => {
+  const projectRole = {
+    displayName: 'Project Copy',
+    description: 'project description',
+    source: 'project-md' as const,
+    filePath: '/ws/foo/.dsh/agents/tester.md',
+  }
+  const globalRole = {
+    displayName: 'Global Copy',
+    description: 'global description',
+    source: 'global-md' as const,
+    filePath: '/home/.dsh/agents/tester.md',
+  }
+  const merged = mergeRoles([globalRole], [projectRole])
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0]!.displayName, 'Project Copy')
+  assert.equal(merged[0]!.source, 'project-md')
+  assert.equal(merged[0]!.isOverride, true)
+  assert.deepEqual(merged[0]!.altPaths, ['/home/.dsh/agents/tester.md'])
+})
+
+test('mergeRoles: global-only roles flow through without altPaths', () => {
+  const globalRole = {
+    displayName: 'Solo',
+    description: 'only in global',
+    source: 'global-md' as const,
+    filePath: '/home/.dsh/agents/solo.md',
+  }
+  const merged = mergeRoles([globalRole], [])
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0]!.displayName, 'Solo')
+  assert.equal(merged[0]!.source, 'global-md')
+  assert.equal(merged[0]!.isOverride, undefined)
+  assert.equal(merged[0]!.altPaths, undefined)
+})
+
+// ---- loadAgentMdRolesAcrossWorkspaces: reads every workspace ----
+
+function writeRoleMd(dir: string, id: string, body: string): void {
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, id + '.md'), body)
+}
+
+const ROLE_FM = (name: string, desc: string): string =>
+  '---\nname: ' + name + '\ndescription: ' + desc + '\n---\n'
+
+test('loadAgentMdRolesAcrossWorkspaces merges global + every workspace project', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-subagent-pro-md-'))
+  try {
+    const globalDir = join(root, 'global')
+    const wsADir = join(root, 'wsA', '.dsh', 'agents')
+    const wsBDir = join(root, 'wsB', '.dsh', 'agents')
+
+    writeRoleMd(globalDir, 'onboard-guide', ROLE_FM('Onboard Guide', 'global-only'))
+    writeRoleMd(wsADir, 'code-reviewer', ROLE_FM('Code Reviewer A', 'project A only'))
+    writeRoleMd(wsBDir, 'tester', ROLE_FM('Tester B', 'project B only'))
+    writeRoleMd(wsBDir, 'onboard-guide', ROLE_FM('Onboard Guide B', 'project B override'))
+
+    const ctx = {
+      workspaceRegistry: {
+        list: () => [
+          { path: join(root, 'wsA') },
+          { path: join(root, 'wsB') },
+        ],
+      },
+    }
+    const result = loadAgentMdRolesAcrossWorkspaces(
+      ctx,
+      globalDir,
+      '.dsh/agents',
+    )
+    assert.equal(result.warnings.length, 0)
+
+    const byId = new Map(
+      result.roles.map((r) => [
+        (r.filePath ?? '').split('/').pop()!.replace('.md', ''),
+        r,
+      ]),
+    )
+    assert.equal(byId.size, 3, 'three distinct ids')
+
+    const codeReviewer = byId.get('code-reviewer')!
+    assert.equal(codeReviewer.source, 'project-md')
+    assert.equal(codeReviewer.displayName, 'Code Reviewer A')
+    assert.equal(codeReviewer.isOverride, undefined)
+    assert.equal(codeReviewer.altPaths, undefined)
+
+    const tester = byId.get('tester')!
+    assert.equal(tester.source, 'project-md')
+    assert.equal(tester.displayName, 'Tester B')
+    assert.equal(tester.isOverride, undefined)
+
+    const onboardGuide = byId.get('onboard-guide')!
+    assert.equal(onboardGuide.source, 'project-md', 'project wins over global on shared id')
+    assert.equal(onboardGuide.displayName, 'Onboard Guide B')
+    assert.equal(onboardGuide.isOverride, true)
+    assert.deepEqual(onboardGuide.altPaths, [join(globalDir, 'onboard-guide.md')])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('loadAgentMdRolesAcrossWorkspaces falls back to no workspaces gracefully', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-subagent-pro-md-empty-'))
+  try {
+    const globalDir = join(root, 'global')
+    writeRoleMd(globalDir, 'solo', ROLE_FM('Solo', 'only global'))
+
+    // workspaceRegistry.list throws — should not break the load.
+    const ctx = {
+      workspaceRegistry: {
+        list: () => {
+          throw new Error('boom')
+        },
+      },
+    }
+    const result = loadAgentMdRolesAcrossWorkspaces(
+      ctx,
+      globalDir,
+      '.dsh/agents',
+    )
+    assert.equal(result.roles.length, 1)
+    assert.equal(
+      (result.roles[0]!.filePath ?? '').split('/').pop()!.replace('.md', ''),
+      'solo',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
