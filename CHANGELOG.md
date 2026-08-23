@@ -4,6 +4,8 @@ All notable changes to `dsh-subagent-pro` are recorded here. Format follows Keep
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-23
+
 ### Added
 
 - **File-backed role section in the role editor (`角色（文件）`)** — every role discovered on disk is loaded and shown read-only alongside the existing editable `角色（设置）` list. Sources: `~/.dsh/agents/*.md` (global) + every registered workspace's `.dsh/agents/*.md` (project). On a same-id collision the **project** copy wins; the panel also tags the entry with `also: 全局/项目` and a gray italic note pointing at the losing file. Source labels (`项目` / `全局`) are coloured chips; entries are pinned with a lucide `lock` SVG (no emoji). Read-only — the editor on the next line explains "修改请直接编辑 .md 文件".
@@ -33,7 +35,6 @@ All notable changes to `dsh-subagent-pro` are recorded here. Format follows Keep
 
 - **子代理面板默认关闭** — the floating panel no longer auto-opens on desktop page load; it starts collapsed and opens only via the HUD toggle button. The running-count badge on the toggle still shows activity while the panel stays closed. Removed the `autoOpenIfDesktop()` mount hook from the client store.
 
-## [0.1.0] - 2026-08-20
 
 ### Added (首发合并版本)
 
