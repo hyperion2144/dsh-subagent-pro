@@ -30,9 +30,21 @@
 
 ## 安装
 
+> ⚠️ **尚未发布到 npm**：`dsh plugin add dsh-subagent-pro`（按包名安装）目前不可用。请使用 GitHub 路径安装（tie 到 tag）：
+
 ```bash
-dsh plugin --profile <name> add dsh-subagent-pro
+dsh plugin --profile <name> add github:hyperion2144/dsh-subagent-pro#v0.1.0
 ```
+
+首次安装需在目标 profile 的 `pnpm-workspace.yaml` 加一条 allowBuilds（pnpm 11 供应链保护：git 依赖必须显式允许构建脚本，否则报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`）。**key 不是包名而是精确的 codeload URL**（含 commit sha，每次发布后不同）——直接复制报错提示里的那行即可：
+
+```yaml
+# ~/.dsh/profiles/<name>/pnpm-workspace.yaml（示例；实际 key 以报错提示为准）
+allowBuilds:
+  "dsh-subagent-pro@https://codeload.github.com/hyperion2144/dsh-subagent-pro/tar.gz/<commit-sha>": true
+```
+
+npm 发布后即可改用 `dsh plugin --profile <name> add dsh-subagent-pro`。
 
 本插件是单一 bundle entry（`dsh-subagent-pro`），自动挂载 host 半 + client 半，无需手写 `cordis.patch.yml`。
 
@@ -193,6 +205,6 @@ pnpm verify:docs
 - Role-based subagent routing (`subagent_role` tool with 4-layer fallback, persona/toolFilter injection)
 - Claude Code style `.dsh/agents/*.md` persona injection (project > global > settings priority)
 
-Install: `dsh plugin --profile <name> add dsh-subagent-pro`. See the Chinese section above for the role md format, settings UI walkthrough, and FAQ.
+Install: `dsh plugin --profile <name> add github:hyperion2144/dsh-subagent-pro#v0.1.0`. See the Chinese section above for the role md format, settings UI walkthrough, and FAQ.
 
 License: MIT.

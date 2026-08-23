@@ -30,9 +30,21 @@ Without their pioneering work, this plugin would not exist. Thanks to the origin
 
 ## Install
 
+> ⚠️ **Not published to npm yet**: `dsh plugin add dsh-subagent-pro` (by package name) does not work yet. Install via the GitHub path (pinned to the tag):
+
 ```bash
-dsh plugin --profile <name> add dsh-subagent-pro
+dsh plugin --profile <name> add github:hyperion2144/dsh-subagent-pro#v0.1.0
 ```
+
+First install requires one allowBuilds entry in the target profile's `pnpm-workspace.yaml` (pnpm 11 supply-chain protection: git-hosted deps must be explicitly allowed to run build scripts, otherwise `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`). **The key is not the package name but the exact codeload URL** (includes the commit sha, changes per release) — copy the line printed in the error message:
+
+```yaml
+# ~/.dsh/profiles/<name>/pnpm-workspace.yaml (example; use the key from the error message)
+allowBuilds:
+  "dsh-subagent-pro@https://codeload.github.com/hyperion2144/dsh-subagent-pro/tar.gz/<commit-sha>": true
+```
+
+Once published to npm, `dsh plugin --profile <name> add dsh-subagent-pro` will work instead.
 
 The plugin is a single bundle entry (`dsh-subagent-pro`) that mounts both the host half and the client half; no manual `cordis.patch.yml` write required. To override defaults, patch the main entry by id:
 
@@ -187,6 +199,6 @@ Save any settings field once, or restart the DSH session that hosts the plugin. 
 - 角色路由委派（`subagent_role` 工具，四层回退，persona / toolFilter 注入）；
 - Claude Code 风格 `.dsh/agents/*.md` persona 注入（项目 > 全局 > settings 优先级）。
 
-安装：`dsh plugin --profile <name> add dsh-subagent-pro`。中文章节详细描述角色 md 格式、设置面板使用与 FAQ。
+安装：`dsh plugin --profile <name> add github:hyperion2144/dsh-subagent-pro#v0.1.0`。中文章节详细描述角色 md 格式、设置面板使用与 FAQ。
 
 License: MIT.
