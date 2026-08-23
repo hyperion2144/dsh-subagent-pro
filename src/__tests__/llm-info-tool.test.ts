@@ -12,6 +12,10 @@ import {
   type LlmInfoToolArgs,
 } from '../llm-info-tool.js'
 
+// ---------------------------------------------------------------------------
+// Pure helpers (unchanged semantics)
+// ---------------------------------------------------------------------------
+
 test('toProviderEntry falls back to id when name missing', () => {
   assert.deepEqual(toProviderEntry({ id: 'opencode-go' }), { id: 'opencode-go', name: 'opencode-go' })
   assert.deepEqual(toProviderEntry({ id: 'x', name: 'X Provider' }), { id: 'x', name: 'X Provider' })
@@ -24,45 +28,34 @@ test('toModelEntry and toEffortEntry share the same id-fallback rule', () => {
   assert.deepEqual(toEffortEntry({ id: 'low', name: 'Low' }), { id: 'low', name: 'Low' })
 })
 
-test('validateLlmInfoArgs: list_providers requires no params', () => {
-  assert.equal(validateLlmInfoArgs({ action: 'list_providers' }), undefined)
+// ---------------------------------------------------------------------------
+// New catalog-style validation
+// ---------------------------------------------------------------------------
+
+test('validateLlmInfoArgs: no params is valid (full catalog)', () => {
+  assert.equal(validateLlmInfoArgs({}), undefined)
+  assert.equal(validateLlmInfoArgs({ provider: '' }), undefined)
+  assert.equal(validateLlmInfoArgs({ provider: 'p1' }), undefined)
+  assert.equal(validateLlmInfoArgs({ provider: 'p1', model: 'm1' }), undefined)
 })
 
-test('validateLlmInfoArgs: list_models requires provider', () => {
-  assert.equal(
-    validateLlmInfoArgs({ action: 'list_models' })?.startsWith('dsh-subagent-pro:'),
-    true,
-  )
-  assert.equal(validateLlmInfoArgs({ action: 'list_models', provider: '' })?.startsWith('dsh-subagent-pro:'), true)
-  assert.equal(validateLlmInfoArgs({ action: 'list_models', provider: 'p1' }), undefined)
+test('validateLlmInfoArgs: model without provider is rejected', () => {
+  const first = validateLlmInfoArgs({ model: 'm1' })
+  assert.ok(first !== undefined)
+  assert.match(first ?? '', /model.*requires.*provider/)
+
+  const second = validateLlmInfoArgs({ provider: '', model: 'm1' })
+  assert.ok(second !== undefined)
+  assert.match(second ?? '', /model.*requires.*provider/)
 })
 
-test('validateLlmInfoArgs: list_reasoning_efforts requires provider AND model', () => {
-  assert.equal(
-    validateLlmInfoArgs({ action: 'list_reasoning_efforts' })?.startsWith('dsh-subagent-pro:'),
-    true,
-  )
-  assert.equal(
-    validateLlmInfoArgs({ action: 'list_reasoning_efforts', provider: 'p1' })?.startsWith('dsh-subagent-pro:'),
-    true,
-  )
-  assert.equal(
-    validateLlmInfoArgs({ action: 'list_reasoning_efforts', provider: 'p1', model: '' })?.startsWith(
-      'dsh-subagent-pro:',
-    ),
-    true,
-  )
-  assert.equal(
-    validateLlmInfoArgs({ action: 'list_reasoning_efforts', provider: 'p1', model: 'm1' }),
-    undefined,
-  )
+test('validateLlmInfoArgs: empty model without provider is fine', () => {
+  assert.equal(validateLlmInfoArgs({ model: '' }), undefined)
 })
 
-test('validateLlmInfoArgs: unknown action is rejected', () => {
-  const msg = validateLlmInfoArgs({ action: 'list_everything' as unknown as 'list_providers' })
-  assert.ok(msg !== undefined)
-  assert.match(msg ?? '', /unknown action "list_everything"/)
-})
+// ---------------------------------------------------------------------------
+// getLlmInfoService
+// ---------------------------------------------------------------------------
 
 test('getLlmInfoService returns undefined when ctx has no llm', () => {
   const ctx = { get: (_name: string) => undefined }
@@ -84,151 +77,125 @@ test('getLlmInfoService returns the service when methods are present', () => {
   assert.equal(getLlmInfoService(ctx as never), svc)
 })
 
-test('createLlmInfoTool: list_providers dispatches to llm.listProviders', async () => {
-  const calls: string[] = []
-  const svc: LlmInfoService = {
-    listProviders: () => {
-      calls.push('providers')
+// ---------------------------------------------------------------------------
+// Full catalog (no params)
+// ---------------------------------------------------------------------------
+
+const fullSvc = (): LlmInfoService => ({
+  listProviders: () => [
+    { id: 'deepseek-official', name: 'DeepSeek' },
+    { id: 'minimax-cn', name: 'MiniMax CN' },
+  ],
+  listModels: async (provider) => {
+    if (provider === 'deepseek-official') {
       return [
-        { id: 'a', name: 'A' },
-        { id: 'b' },
+        { id: 'deepseek-v4-flash', name: 'Flash' },
+        { id: 'deepseek-v4-pro', name: 'Pro' },
       ]
-    },
-    listModels: async () => {
-      calls.push('models')
-      return []
-    },
-    resolveModelInfo: async () => {
-      calls.push('reasoning')
-      return {}
-    },
-  }
-  const ctx = { get: (_name: string) => svc, logger: { info: () => undefined } }
-  const tool = createLlmInfoTool({ ctx: ctx as never, toolName: 'subagent_providers' })
-  // Drive execute through the public surface — defineTool returns the
-  // registry-bound tool but its execute is reachable via the .execute hook.
-  // We cast through unknown to call it without the typed schema wrapper.
-  const exec = (tool as unknown as { execute: (args: LlmInfoToolArgs) => Promise<unknown> }).execute
-  const result = (await exec({ action: 'list_providers' })) as { kind: string; providers: Array<{ id: string; name: string }> }
-  assert.equal(result.kind, 'providers')
-  assert.deepEqual(result.providers, [
-    { id: 'a', name: 'A' },
-    { id: 'b', name: 'b' },
-  ])
-  assert.deepEqual(calls, ['providers'])
-})
-
-test('createLlmInfoTool: list_models requires provider and dispatches', async () => {
-  const calls: Array<{ method: string; provider?: string }> = []
-  const svc: LlmInfoService = {
-    listProviders: () => {
-      calls.push({ method: 'providers' })
-      return []
-    },
-    listModels: async (provider) => {
-      calls.push({ method: 'models', provider })
-      return [{ id: 'm1', name: 'M1' }]
-    },
-    resolveModelInfo: async () => {
-      calls.push({ method: 'reasoning' })
-      return {}
-    },
-  }
-  const ctx = { get: (_name: string) => svc, logger: { info: () => undefined } }
-  const tool = createLlmInfoTool({ ctx: ctx as never })
-  const exec = (tool as unknown as { execute: (args: LlmInfoToolArgs) => Promise<unknown> }).execute
-  const result = (await exec({ action: 'list_models', provider: 'p1' })) as { kind: string; provider: string; models: Array<{ id: string; name: string }> }
-  assert.equal(result.kind, 'models')
-  assert.equal(result.provider, 'p1')
-  assert.deepEqual(result.models, [{ id: 'm1', name: 'M1' }])
-  assert.deepEqual(calls, [{ method: 'models', provider: 'p1' }])
-})
-
-test('createLlmInfoTool: list_reasoning_efforts forwards provider + model', async () => {
-  let lastResolve: { provider: string; model: string } | undefined
-  const svc: LlmInfoService = {
-    listProviders: () => [],
-    listModels: async () => [],
-    resolveModelInfo: async (provider, model) => {
-      lastResolve = { provider, model }
+    }
+    return [{ id: 'MiniMax-M3', name: 'M3' }]
+  },
+  resolveModelInfo: async (provider, model) => {
+    if (provider === 'deepseek-official' && model === 'deepseek-v4-pro') {
       return {
         reasoning: {
           efforts: [
-            { id: 'low', name: 'Low' },
-            { id: 'high' },
+            { id: 'off', name: 'Off' },
+            { id: 'high', name: 'High' },
           ],
-          defaultEffort: 'low',
+          defaultEffort: 'high',
         },
       }
+    }
+    return { reasoning: { efforts: [{ id: 'low', name: 'Low' }] } }
+  },
+})
+
+const execOf = (ctx: unknown): ((a: LlmInfoToolArgs) => Promise<unknown>) => {
+  const tool = createLlmInfoTool({ ctx: ctx as never, toolName: 'subagent_providers' })
+  return (tool as unknown as { execute: (a: LlmInfoToolArgs) => Promise<unknown> }).execute
+}
+
+test('createLlmInfoTool: no params returns nested catalog (all providers → models → efforts)', async () => {
+  const ctx = { get: (_name: string) => fullSvc(), logger: { info: () => undefined } }
+  const exec = execOf(ctx)
+  const result = (await exec({})) as {
+    kind: string
+    providers: Array<{
+      id: string
+      name: string
+      models: Array<{ id: string; name: string; reasoningEfforts: Array<{ id: string; name: string }>; defaultEffort?: string }>
+    }>
+  }
+  assert.equal(result.kind, 'catalog')
+  assert.equal(result.providers.length, 2)
+
+  const minimax = result.providers.find((p) => p.id === 'minimax-cn')!
+  assert.equal(minimax.name, 'MiniMax CN')
+  assert.equal(minimax.models.length, 1)
+  assert.equal(minimax.models[0]!.id, 'MiniMax-M3')
+  assert.deepEqual(minimax.models[0]!.reasoningEfforts, [{ id: 'low', name: 'Low' }])
+
+  const deepseek = result.providers.find((p) => p.id === 'deepseek-official')!
+  assert.equal(deepseek.models.length, 2)
+  const pro = deepseek.models.find((m) => m.id === 'deepseek-v4-pro')!
+  assert.deepEqual(pro.reasoningEfforts, [
+    { id: 'off', name: 'Off' },
+    { id: 'high', name: 'High' },
+  ])
+  assert.equal(pro.defaultEffort, 'high')
+})
+
+test('createLlmInfoTool: provider-scoped returns only that provider subtree', async () => {
+  const ctx = { get: (_name: string) => fullSvc(), logger: { info: () => undefined } }
+  const exec = execOf(ctx)
+  const result = (await exec({ provider: 'minimax-cn' })) as { kind: string; providers: Array<{ id: string; models: unknown[] }> }
+  assert.equal(result.providers.length, 1)
+  assert.equal(result.providers[0]!.id, 'minimax-cn')
+  assert.equal(result.providers[0]!.models.length, 1)
+})
+
+test('createLlmInfoTool: unknown provider scoped returns empty providers', async () => {
+  const ctx = { get: (_name: string) => fullSvc(), logger: { info: () => undefined } }
+  const exec = execOf(ctx)
+  const result = (await exec({ provider: 'nope' })) as { providers: unknown[] }
+  assert.deepEqual(result.providers, [])
+})
+
+test('createLlmInfoTool: provider + model returns only that model leaf', async () => {
+  const seen: Array<{ provider: string; model: string }> = []
+  const svc: LlmInfoService = {
+    ...fullSvc(),
+    resolveModelInfo: async (provider, model) => {
+      seen.push({ provider, model })
+      return fullSvc().resolveModelInfo(provider, model)
     },
   }
   const ctx = { get: (_name: string) => svc, logger: { info: () => undefined } }
-  const tool = createLlmInfoTool({ ctx: ctx as never })
-  const exec = (tool as unknown as { execute: (args: LlmInfoToolArgs) => Promise<unknown> }).execute
-  const result = (await exec({ action: 'list_reasoning_efforts', provider: 'p1', model: 'm1' })) as {
-    kind: string
-    provider: string
-    model: string
-    efforts: Array<{ id: string; name: string }>
-    defaultEffort: string | undefined
+  const exec = execOf(ctx)
+  const result = (await exec({ provider: 'deepseek-official', model: 'deepseek-v4-pro' })) as {
+    providers: Array<{ id: string; models: Array<{ id: string; reasoningEfforts: unknown[]; defaultEffort?: string }> }>
   }
-  assert.equal(result.kind, 'reasoning')
-  assert.deepEqual(lastResolve, { provider: 'p1', model: 'm1' })
-  assert.deepEqual(result.efforts, [
-    { id: 'low', name: 'Low' },
-    { id: 'high', name: 'high' },
-  ])
-  assert.equal(result.defaultEffort, 'low')
+  assert.equal(result.providers.length, 1)
+  assert.equal(result.providers[0]!.models.length, 1)
+  assert.equal(result.providers[0]!.models[0]!.id, 'deepseek-v4-pro')
+  assert.equal(result.providers[0]!.models[0]!.defaultEffort, 'high')
+  assert.deepEqual(seen, [{ provider: 'deepseek-official', model: 'deepseek-v4-pro' }], 'only the exact model is resolved')
 })
 
-test('createLlmInfoTool: missing reasoning block returns empty efforts and no default', async () => {
-  const svc: LlmInfoService = {
-    listProviders: () => [],
-    listModels: async () => [],
-    resolveModelInfo: async () => ({}) as never,
-  }
-  const ctx = { get: (_name: string) => svc, logger: { info: () => undefined } }
-  const tool = createLlmInfoTool({ ctx: ctx as never })
-  const exec = (tool as unknown as { execute: (args: LlmInfoToolArgs) => Promise<unknown> }).execute
-  const result = (await exec({ action: 'list_reasoning_efforts', provider: 'p1', model: 'm1' })) as {
-    kind: string
-    efforts: Array<{ id: string; name: string }>
-    defaultEffort: string | undefined
-  }
-  assert.equal(result.kind, 'reasoning')
-  assert.deepEqual(result.efforts, [])
-  assert.equal(result.defaultEffort, undefined)
-})
-
-test('createLlmInfoTool: missing llm service returns empty results instead of throwing', async () => {
+test('createLlmInfoTool: missing llm service returns empty catalog instead of throwing', async () => {
   const ctx = { get: (_name: string) => undefined, logger: { info: () => undefined } }
-  const tool = createLlmInfoTool({ ctx: ctx as never })
-  const exec = (tool as unknown as { execute: (args: LlmInfoToolArgs) => Promise<unknown> }).execute
+  const exec = execOf(ctx)
+  const noParams = (await exec({})) as { kind: string; providers: unknown[] }
+  assert.equal(noParams.kind, 'catalog')
+  assert.deepEqual(noParams.providers, [])
 
-  const providers = (await exec({ action: 'list_providers' })) as { kind: string; providers: unknown[] }
-  assert.equal(providers.kind, 'providers')
-  assert.deepEqual(providers.providers, [])
-
-  const models = (await exec({ action: 'list_models', provider: 'p1' })) as { kind: string; provider: string; models: unknown[] }
-  assert.equal(models.kind, 'models')
-  assert.equal(models.provider, 'p1')
-  assert.deepEqual(models.models, [])
-
-  const reasoning = (await exec({ action: 'list_reasoning_efforts', provider: 'p1', model: 'm1' })) as {
-    kind: string
-    provider: string
-    model: string
-    efforts: unknown[]
-    defaultEffort: undefined
-  }
-  assert.equal(reasoning.kind, 'reasoning')
-  assert.equal(reasoning.provider, 'p1')
-  assert.equal(reasoning.model, 'm1')
-  assert.deepEqual(reasoning.efforts, [])
-  assert.equal(reasoning.defaultEffort, undefined)
+  const scoped = (await exec({ provider: 'p1', model: 'm1' })) as { kind: string; providers: unknown[] }
+  assert.equal(scoped.kind, 'catalog')
+  assert.deepEqual(scoped.providers, [])
 })
 
-test('createLlmInfoTool: validation throws before touching llm when args are bad', async () => {
+test('createLlmInfoTool: validation throws before touching llm when model lacks provider', async () => {
   let touched = false
   const svc: LlmInfoService = {
     listProviders: () => {
@@ -245,15 +212,14 @@ test('createLlmInfoTool: validation throws before touching llm when args are bad
     },
   }
   const ctx = { get: (_name: string) => svc, logger: { info: () => undefined } }
-  const tool = createLlmInfoTool({ ctx: ctx as never })
-  const exec = (tool as unknown as { execute: (args: LlmInfoToolArgs) => Promise<unknown> }).execute
-  await assert.rejects(() => exec({ action: 'list_models' }), /list_models.*provider/)
-  await assert.rejects(() => exec({ action: 'list_reasoning_efforts', provider: 'p1' }), /list_reasoning_efforts.*model/)
-  // Unknown action is caught by the schema enum validator (dsh-tools) before
-  // reaching our handler, so the message format comes from the framework.
-  await assert.rejects(
-    () => exec({ action: 'unknown' as unknown as 'list_providers' }),
-    /(unknown action|invalid arguments)/,
-  )
+  const exec = execOf(ctx)
+  await assert.rejects(() => exec({ model: 'm1' }), /model.*requires.*provider/)
   assert.equal(touched, false)
+})
+
+test('createLlmInfoTool: model with empty provider string degrades to full catalog', async () => {
+  const ctx = { get: (_name: string) => fullSvc(), logger: { info: () => undefined } }
+  const exec = execOf(ctx)
+  const result = (await exec({ provider: '', model: '' })) as { providers: unknown[] }
+  assert.equal(result.providers.length, 2, 'empty strings are treated as "no scope"')
 })

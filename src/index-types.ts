@@ -21,6 +21,14 @@ export interface SubagentProConfig {
   infoToolName?: string
   /** Register the LLM info tool. Default true. Set false to disable. */
   enableLlmInfoTool?: boolean
+  /**
+   * Model-facing tool name for the roles info tool that exposes the merged
+   * role table (project md > global md > settings) to the agent. Default
+   * 'subagent_roles'.
+   */
+  rolesToolName?: string
+  /** Register the roles info tool. Default true. Set false to disable. */
+  enableRolesTool?: boolean
   /** Expose `run_in_background` (default true). */
   enableRunInBackground?: boolean
   /** Background execution policy: 'one-shot' (default) or 'continuable'. */

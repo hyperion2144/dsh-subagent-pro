@@ -1,23 +1,23 @@
 /**
  * LLM info tool `subagent_providers` — model-facing tool that lets the agent
  * discover which LLM providers, models, and reasoning-effort levels are
- * routable through the host `llm` service.
+ * routable through the host `llm` service, organized as a nested catalog:
  *
- * Three actions (mutually exclusive, dispatched by `action`):
- *   - `list_providers`            → array of { id, name }
- *   - `list_models`               → requires `provider`, returns models
- *   - `list_reasoning_efforts`    → requires `provider` + `model`, returns efforts
+ *   subagent_providers()
+ *     → all providers: [ { id, name, models: [ { id, name,
+ *         reasoningEfforts: [ {id,name} ], defaultEffort? } ] } ]
+ *   subagent_providers({ provider: "deepseek-official" })
+ *     → only that provider's subtree (empty array if unknown)
+ *   subagent_providers({ provider: "deepseek-official", model: "deepseek-v4-pro" })
+ *     → only that model's leaf under the provider
  *
- * The shape mirrors the HTTP bridge at `/api/dsh-subagent-pro/llm/*` (same
- * service calls, identical output) so UI consumers (role editor) and the model
- * see the same data. The tool tolerates a missing `llm` service: every action
- * returns an empty result rather than throwing, so removing the llm service
- * mid-session does not break open agent runs.
+ * All parameters are OPTIONAL — no action enum. The catalog is resolved
+ * lazily per call (listProviders → listModels → resolveModelInfo per model),
+ * so a provider-scoped or model-scoped call skips the extra enumeration work.
  *
- * No subagent transport dependency — this tool only reads the host `llm`
- * service, so it can register as soon as `ctx.llm` is mounted.
- *
- * Inherited from dsh-plugin-subagent-director (delegation-tool.ts pattern).
+ * The tool tolerates a missing `llm` service: every call returns an empty
+ * catalog rather than throwing, so removing the llm service mid-session does
+ * not break open agent runs.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -26,23 +26,11 @@ export const LLM_INFO_TOOL_PREFIX = 'dsh-subagent-pro'
 
 const ERROR_PREFIX = 'dsh-subagent-pro:'
 
-/** Action enum — matches the bridge endpoints at /api/dsh-subagent-pro/llm/*. */
-export type LlmInfoAction = 'list_providers' | 'list_models' | 'list_reasoning_efforts'
-
 export interface LlmInfoToolArgs {
-  action: LlmInfoAction
+  /** Optional provider scope. Empty → all providers. */
   provider?: string
+  /** Optional exact model scope under `provider`. Ignored when `provider` empty. */
   model?: string
-}
-
-export interface ProviderEntry {
-  id: string
-  name: string
-}
-
-export interface ModelEntry {
-  id: string
-  name: string
 }
 
 export interface ReasoningEffortEntry {
@@ -50,27 +38,28 @@ export interface ReasoningEffortEntry {
   name: string
 }
 
-export interface ProvidersResult {
-  kind: 'providers'
-  providers: ProviderEntry[]
-}
-
-export interface ModelsResult {
-  kind: 'models'
-  provider: string
-  models: ModelEntry[]
-}
-
-export interface ReasoningResult {
-  kind: 'reasoning'
-  provider: string
-  model: string
-  efforts: ReasoningEffortEntry[]
-  /** Adapter-declared default effort (omitted when the adapter has none). */
+export interface CatalogModel {
+  id: string
+  name: string
+  /** Adapter-declared selectable reasoning levels, in adapter order. */
+  reasoningEfforts: ReasoningEffortEntry[]
+  /** Adapter-declared default effort, when one exists. */
   defaultEffort?: string
 }
 
-export type AnyLlmInfoResult = ProvidersResult | ModelsResult | ReasoningResult
+export interface CatalogProvider {
+  id: string
+  name: string
+  /** Models under this provider, each carrying its own reasoning levels. */
+  models: CatalogModel[]
+}
+
+export interface CatalogResult {
+  kind: 'catalog'
+  providers: CatalogProvider[]
+}
+
+export type AnyLlmInfoResult = CatalogResult
 
 /** Minimal host llm surface — the same one bridge-entry.ts relies on. */
 export interface LlmInfoService {
@@ -84,28 +73,11 @@ export interface LlmInfoService {
   }>
 }
 
-function emptyProviders(): ProvidersResult {
-  return { kind: 'providers', providers: [] }
-}
-
-function emptyModels(provider: string): ModelsResult {
-  return { kind: 'models', provider, models: [] }
-}
-
-function emptyReasoning(provider: string, model: string): ReasoningResult {
-  return { kind: 'reasoning', provider, model, efforts: [] }
-}
-
-/**
- * Map a raw provider descriptor to the public ProviderEntry shape. Falls back
- * to the id when the service omits a display name (forward-compat for adapters
- * that only ship an id).
- */
-export function toProviderEntry(raw: { id: string; name?: string }): ProviderEntry {
+export function toProviderEntry(raw: { id: string; name?: string }): { id: string; name: string } {
   return { id: raw.id, name: raw.name ?? raw.id }
 }
 
-export function toModelEntry(raw: { id: string; name?: string }): ModelEntry {
+export function toModelEntry(raw: { id: string; name?: string }): { id: string; name: string } {
   return { id: raw.id, name: raw.name ?? raw.id }
 }
 
@@ -114,34 +86,14 @@ export function toEffortEntry(raw: { id: string; name?: string }): ReasoningEffo
 }
 
 /**
- * Validate the action/params contract. Centralized so tests can exercise it
- * without spinning up a real `llm` service.
+ * Validate the (now optional) params: a `model` without a `provider` is the
+ * only invalid shape. No `provider`/`model` → full catalog (valid).
  */
-export function validateLlmInfoArgs(args: { action: string; provider?: string; model?: string }): string | undefined {
-  switch (args.action) {
-    case 'list_providers':
-      return undefined
-    case 'list_models':
-      if (typeof args.provider !== 'string' || args.provider === '') {
-        return ERROR_PREFIX + ' action "list_models" requires a non-empty "provider" argument'
-      }
-      return undefined
-    case 'list_reasoning_efforts':
-      if (typeof args.provider !== 'string' || args.provider === '') {
-        return ERROR_PREFIX + ' action "list_reasoning_efforts" requires a non-empty "provider" argument'
-      }
-      if (typeof args.model !== 'string' || args.model === '') {
-        return ERROR_PREFIX + ' action "list_reasoning_efforts" requires a non-empty "model" argument'
-      }
-      return undefined
-    default:
-      return (
-        ERROR_PREFIX +
-        ' unknown action "' +
-        String(args.action) +
-        '" — expected one of: list_providers, list_models, list_reasoning_efforts'
-      )
+export function validateLlmInfoArgs(args: { provider?: string; model?: string }): string | undefined {
+  if (args.model !== undefined && args.model !== '' && (args.provider === undefined || args.provider === '')) {
+    return ERROR_PREFIX + ' argument "model" requires a non-empty "provider" argument'
   }
+  return undefined
 }
 
 export interface CreateLlmInfoToolOptions {
@@ -164,6 +116,58 @@ export function getLlmInfoService(ctx: Context): LlmInfoService | undefined {
   return candidate as LlmInfoService
 }
 
+/**
+ * Build the nested catalog for one provider (or all providers when `provider`
+ * is empty). When `model` is set, only that model's leaf is enumerated.
+ * Provider-looking-up is best-effort: if the choose provider id isn't
+ * registered, the array is empty (caller renders "no such provider").
+ */
+async function buildProviderCatalog(
+  llm: LlmInfoService,
+  scopedProvider: string | undefined,
+  scopedModel: string | undefined,
+): Promise<CatalogProvider[]> {
+  const rawProviders = llm.listProviders()
+  const providers = rawProviders
+    .filter((p) => scopedProvider === undefined || p.id === scopedProvider)
+    .map(toProviderEntry)
+
+  const out: CatalogProvider[] = []
+  for (const provider of providers) {
+    let rawModels: Array<{ id: string; name?: string }> = []
+    try {
+      rawModels = await llm.listModels(provider.id)
+    } catch {
+      rawModels = []
+    }
+    const models = rawModels
+      .filter((m) => scopedModel === undefined || m.id === scopedModel)
+      .map(toModelEntry)
+
+    const modelEntries: CatalogModel[] = []
+    for (const model of models) {
+      let efforts: ReasoningEffortEntry[] = []
+      let defaultEffort: string | undefined
+      try {
+        const resolved = await llm.resolveModelInfo(provider.id, model.id)
+        efforts = (resolved.reasoning?.efforts ?? []).map(toEffortEntry)
+        defaultEffort = resolved.reasoning?.defaultEffort
+      } catch {
+        efforts = []
+        defaultEffort = undefined
+      }
+      modelEntries.push({
+        id: model.id,
+        name: model.name,
+        reasoningEfforts: efforts,
+        ...(defaultEffort !== undefined ? { defaultEffort } : {}),
+      })
+    }
+    out.push({ id: provider.id, name: provider.name, models: modelEntries })
+  }
+  return out
+}
+
 export function createLlmInfoTool(opts: CreateLlmInfoToolOptions): unknown {
   const { ctx } = opts
   const toolName = opts.toolName ?? 'subagent_providers'
@@ -171,165 +175,110 @@ export function createLlmInfoTool(opts: CreateLlmInfoToolOptions): unknown {
   const tool = defineTool({
     name: toolName,
     description:
-      'Discover routable LLM providers, models, and reasoning-effort levels available to the host `llm` service. ' +
-      'Use `action: "list_providers"` to enumerate providers; `action: "list_models"` (requires `provider`) to enumerate models under a provider; `action: "list_reasoning_efforts"` (requires `provider` + `model`) to enumerate supported reasoning-effort levels and the model default. ' +
-      'Tolerates a missing `llm` service: returns an empty result rather than throwing.',
+      'Discover routable LLM providers, models, and reasoning-effort levels, organized as a nested catalog: each provider contains its models, each model contains its supported reasoning efforts and the adapter default. ' +
+      'All arguments are optional: call with no arguments to get every provider; pass `provider` to scope to that provider only; pass `provider` + `model` to get only that exact model leaf. ' +
+      'Tolerates a missing `llm` service: returns an empty catalog rather than throwing.',
     parameters: {
-      action: {
-        type: 'string',
-        required: true,
-        enum: ['list_providers', 'list_models', 'list_reasoning_efforts'],
-        description:
-          'Which info slice to fetch. "list_providers" enumerates providers; "list_models" requires a provider; "list_reasoning_efforts" requires both provider and model.',
-      },
       provider: {
         type: 'string',
-        description: 'Provider id (required for list_models and list_reasoning_efforts).',
+        description: 'Optional provider id to scope the catalog to. Omit for all providers.',
       },
       model: {
         type: 'string',
-        description: 'Model id (required for list_reasoning_efforts).',
+        description: 'Optional exact model id to scope to (requires `provider`). Omit for all models under the provider(s).',
       },
     },
     output: {
       schema: {
-        oneOf: [
-          {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              kind: { type: 'string', required: true, const: 'providers' },
-              providers: {
-                type: 'array',
-                required: true,
-                items: {
-                  type: 'object',
-                  additionalProperties: false,
-                  properties: {
-                    id: { type: 'string', required: true },
-                    name: { type: 'string', required: true },
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          kind: { type: 'string', required: true, const: 'catalog' },
+          providers: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                id: { type: 'string', required: true },
+                name: { type: 'string', required: true },
+                models: {
+                  type: 'array',
+                  required: true,
+                  items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      id: { type: 'string', required: true },
+                      name: { type: 'string', required: true },
+                      reasoningEfforts: {
+                        type: 'array',
+                        required: true,
+                        items: {
+                          type: 'object',
+                          additionalProperties: false,
+                          properties: {
+                            id: { type: 'string', required: true },
+                            name: { type: 'string', required: true },
+                          },
+                        },
+                      },
+                      defaultEffort: { type: 'string' },
+                    },
                   },
                 },
               },
             },
           },
-          {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              kind: { type: 'string', required: true, const: 'models' },
-              provider: { type: 'string', required: true },
-              models: {
-                type: 'array',
-                required: true,
-                items: {
-                  type: 'object',
-                  additionalProperties: false,
-                  properties: {
-                    id: { type: 'string', required: true },
-                    name: { type: 'string', required: true },
-                  },
-                },
-              },
-            },
-          },
-          {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              kind: { type: 'string', required: true, const: 'reasoning' },
-              provider: { type: 'string', required: true },
-              model: { type: 'string', required: true },
-              efforts: {
-                type: 'array',
-                required: true,
-                items: {
-                  type: 'object',
-                  additionalProperties: false,
-                  properties: {
-                    id: { type: 'string', required: true },
-                    name: { type: 'string', required: true },
-                  },
-                },
-              },
-              defaultEffort: { type: 'string' },
-            },
-          },
-        ],
+        },
       },
       render: (_args: LlmInfoToolArgs, value: AnyLlmInfoResult) => {
-        let text: string
-        switch (value.kind) {
-          case 'providers':
-            text =
-              value.providers.length === 0
-                ? 'no providers available'
-                : value.providers.map((p) => p.id + (p.name === p.id ? '' : ' (' + p.name + ')')).join(', ')
-            break
-          case 'models':
-            text =
-              value.models.length === 0
-                ? 'no models under provider ' + value.provider
-                : value.models.map((m) => m.id + (m.name === m.id ? '' : ' (' + m.name + ')')).join(', ')
-            break
-          case 'reasoning': {
-            const effortList =
-              value.efforts.length === 0
+        const lines: string[] = []
+        if (value.providers.length === 0) {
+          lines.push('no providers available')
+        }
+        for (const p of value.providers) {
+          lines.push(p.id + (p.name === p.id ? '' : ' (' + p.name + ')'))
+          if (p.models.length === 0) {
+            lines.push('  (no models)')
+          }
+          for (const m of p.models) {
+            const effortText =
+              m.reasoningEfforts.length === 0
                 ? 'no reasoning efforts'
-                : value.efforts.map((e) => e.id + (e.name === e.id ? '' : ' (' + e.name + ')')).join(', ')
-            text =
-              value.provider +
-              '/' +
-              value.model +
-              ': efforts=[' +
-              effortList +
-              '] default=' +
-              (value.defaultEffort ?? '(none)')
-            break
+                : m.reasoningEfforts
+                    .map((e) => e.id + (e.name === e.id ? '' : ' (' + e.name + ')'))
+                    .join(', ')
+            lines.push(
+              '  ' + m.id + (m.name === m.id ? '' : ' (' + m.name + ')') +
+                ': efforts=[' + effortText + '] default=' + (m.defaultEffort ?? '(none)'),
+            )
           }
         }
-        return [{ type: 'text', text }]
+        return [{ type: 'text', text: lines.join('\n') }]
       },
     },
     isConcurrencySafe: () => true,
-    async execute(args: LlmInfoToolArgs) {
+    async execute(args: LlmInfoToolArgs): Promise<AnyLlmInfoResult> {
       const validation = validateLlmInfoArgs(args)
       if (validation !== undefined) throw new Error(validation)
 
+      const provider = args.provider === '' ? undefined : args.provider
+      const model = args.model === '' ? undefined : args.model
+
       const llm = getLlmInfoService(ctx)
       if (llm === undefined) {
-        // Tolerate missing service: return the same shape with empty arrays.
-        if (args.action === 'list_providers') return emptyProviders()
-        if (args.action === 'list_models') return emptyModels(args.provider ?? '')
-        return emptyReasoning(args.provider ?? '', args.model ?? '')
+        return { kind: 'catalog' as const, providers: [] }
       }
 
       ctx.logger?.info?.(
-        '[' + LLM_INFO_TOOL_PREFIX + '] action=' + args.action + ' provider=' + (args.provider ?? '') + ' model=' + (args.model ?? ''),
+        '[' + LLM_INFO_TOOL_PREFIX + '] catalog scoped provider=' + (provider ?? '') + ' model=' + (model ?? ''),
       )
 
-      if (args.action === 'list_providers') {
-        const providers = llm.listProviders().map(toProviderEntry)
-        return { kind: 'providers' as const, providers }
-      }
-
-      if (args.action === 'list_models') {
-        const provider = args.provider as string
-        const models = (await llm.listModels(provider)).map(toModelEntry)
-        return { kind: 'models' as const, provider, models }
-      }
-
-      const provider = args.provider as string
-      const model = args.model as string
-      const resolved = await llm.resolveModelInfo(provider, model)
-      const efforts = (resolved.reasoning?.efforts ?? []).map(toEffortEntry)
-      const reasoning = resolved.reasoning
       return {
-        kind: 'reasoning' as const,
-        provider,
-        model,
-        efforts,
-        ...(reasoning?.defaultEffort !== undefined ? { defaultEffort: reasoning.defaultEffort } : {}),
+        kind: 'catalog' as const,
+        providers: await buildProviderCatalog(llm, provider, model),
       }
     },
   })

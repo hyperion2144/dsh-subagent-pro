@@ -10,6 +10,7 @@ import { applyDefaultRouteSeam } from './default-route.js'
 import { createDelegationTool } from './delegation-tool.js'
 import { applyGuidance } from './guidance.js'
 import { createLlmInfoTool } from './llm-info-tool.js'
+import { createRolesTool } from './roles-info-tool.js'
 import type { SubagentProConfig } from './index-types.js'
 import type { ResolvedSubagentProSettings } from './settings.js'
 import type { AgentMdHandle } from './agents-md.js'
@@ -59,6 +60,17 @@ export function mountRoles(
     const infoTool = createLlmInfoTool({ ctx, toolName: infoToolName })
     const infoSvc = ctx.tools as unknown as { register: (t: typeof infoTool) => () => void }
     infoSvc.register(infoTool)
+  }
+
+  // Roles info tool — lets the agent discover every role it can hand to
+  // `subagent_role`. Reads the same merged role table (project md > global
+  // md > settings) the delegation tool resolves against.
+  const rolesToolName = config.rolesToolName ?? 'subagent_roles'
+  if (config.enableRolesTool !== false) {
+    ctx.logger.info('[dsh-subagent-pro] registering ' + rolesToolName + ' role listing tool')
+    const rolesTool = createRolesTool({ ctx, toolName: rolesToolName, getRoles: resolved.getRoles })
+    const toolsSvc = ctx.tools as unknown as { register: (t: typeof rolesTool) => () => void }
+    toolsSvc.register(rolesTool)
   }
 
   if (typeof config.maxDepth === 'number') assertSubagentMaxDepth(config.maxDepth)
