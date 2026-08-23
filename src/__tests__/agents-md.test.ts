@@ -192,6 +192,31 @@ test('loadAgentMdRolesAcrossWorkspaces merges global + every workspace project',
   }
 })
 
+test('loadAgentMdRolesAcrossWorkspaces falls back to shell cwd when registry absent', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-subagent-pro-md-cwd-'))
+  try {
+    const globalDir = join(root, 'global')
+    const cwd = join(root, 'cwd')
+    writeRoleMd(globalDir, 'solo', ROLE_FM('Solo', 'only global'))
+    writeRoleMd(join(cwd, '.dsh', 'agents'), 'cwd-role', ROLE_FM('Cwd Role', 'from cwd'))
+
+    // No workspaceRegistry at all — the loader must still scan the shell cwd
+    // (documented fallback), so headless profiles keep project md roles.
+    const ctx = {
+      get: (name: string) => (name === 'shell' ? { cwd } : undefined),
+    }
+    const result = loadAgentMdRolesAcrossWorkspaces(ctx, globalDir, '.dsh/agents')
+    const ids = new Set(
+      result.roles.map((r) => (r.filePath ?? '').split('/').pop()!.replace('.md', '')),
+    )
+    assert.equal(result.roles.length, 2, 'global + cwd project roles')
+    assert.equal(ids.has('cwd-role'), true)
+    assert.equal(ids.has('solo'), true)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('loadAgentMdRolesAcrossWorkspaces falls back to no workspaces gracefully', () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-subagent-pro-md-empty-'))
   try {

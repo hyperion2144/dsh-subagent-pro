@@ -27,7 +27,7 @@ export type { SubagentProConfig } from './index-types.js'
 
 import { mountMonitor } from './monitor.js'
 import { mountRoles } from './roles.js'
-import { loadAgentMdRoles, refreshAgentMdRoles } from './agents-md.js'
+import { loadAgentMdRolesAcrossWorkspaces } from './agents-md.js'
 import { resolveSettings, SUBAGENT_PRO_SETTINGS_NAMESPACE } from './settings.js'
 
 export const name = 'dsh-subagent-pro'
@@ -47,16 +47,16 @@ export function apply(ctx: Context, config: SubagentProConfig = {}): void {
   // 1. settings snapshot — single source of truth for defaults + role table.
   const resolved = resolveSettings(ctx, config)
 
-  // 2. Agent md handle (file scanner, refreshable on settings/cwd change).
-  const agentMd = loadAgentMdRoles(resolved.globalAgentDir, resolved.projectAgentDirName)
-
+  // 2. Agent md roles — same multi-workspace loader the bridge /roles endpoint
+  //    and the settings UI use, so the runtime role table (subagent_roles,
+  //    subagent_role lookup, system-prompt guidance) shows the SAME merged
+  //    table as the browser: global agent dir + every registered workspace's
+  //    .dsh/agents/*.md, project wins on id collisions.
   const reloadMd = (): void => {
-    const cwd = ctx.get('shell')?.cwd
-    const merged = refreshAgentMdRoles(
-      agentMd,
+    const merged = loadAgentMdRolesAcrossWorkspaces(
+      ctx,
       resolved.globalAgentDir,
       resolved.projectAgentDirName,
-      cwd,
     )
     resolved.setMdRoles(merged.roles, merged.warnings)
   }
@@ -72,10 +72,24 @@ export function apply(ctx: Context, config: SubagentProConfig = {}): void {
       reloadMd()
     },
   )
+  // The workspaceRegistry service (dsh-workspace) becomes ACTIVE asynchronously
+  // after boot — its `Service.init` awaits storage/session persistence, so a
+  // reloadMd() at apply time may run before the registry exists and cache an
+  // empty md layer. Cordis emits `internal/service` when a service is provided
+  // (state == active), so re-scan the md layer once workspaceRegistry appears.
+  // `ctx.get(name, false)` would read even inactive impls; the event fires for
+  // the active value via `reflect.notify`.
+  ;(ctx as unknown as { on: (event: string, listener: (name: string) => void) => void }).on(
+    'internal/service',
+    (name: string) => {
+      if (name !== 'workspaceRegistry') return
+      reloadMd()
+    },
+  )
 
   // 3. Live subagent monitor — event attribution + snapshot endpoint.
   mountMonitor(ctx, resolved)
 
   // 4. Role-based routing: delegation tool + default route seam + system prompt section.
-  mountRoles(ctx, config, resolved, agentMd)
+  mountRoles(ctx, config, resolved)
 }

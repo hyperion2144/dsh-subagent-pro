@@ -311,8 +311,17 @@ export function loadAgentMdRolesAcrossWorkspaces(
   globalDir: string,
   projectDirName: string,
 ): AgentMdLoadResult {
-  const registry = (ctx as { workspaceRegistry?: { list?: () => WorkspaceEntryLike[] } })
-    .workspaceRegistry
+  // Read the workspace registry through the OPTIONAL-service path so this
+  // loader is safe to call from entries that do NOT declare it in `inject`
+  // (the host entry's apply() must boot even in headless profiles where the
+  // registry is absent). Direct property access would throw "cannot get
+  // property without inject" under cordis; `ctx.get()` resolves registered
+  // services (bridge entry injects workspaceRegistry) and returns undefined
+  // otherwise. Plain-object callers (tests) fall back to the property.
+  const getFn = (ctx as { get?: (name: string) => unknown }).get
+  const rawRegistry =
+    getFn !== undefined ? getFn('workspaceRegistry') : (ctx as { workspaceRegistry?: unknown }).workspaceRegistry
+  const registry = rawRegistry as { list?: () => WorkspaceEntryLike[] } | undefined
   const workspacePaths: string[] = []
   if (registry?.list !== undefined) {
     try {
@@ -323,6 +332,15 @@ export function loadAgentMdRolesAcrossWorkspaces(
       }
     } catch {
       /* fall through to empty */
+    }
+  }
+  // Documented fallback for headless / smoke profiles without the workspace
+  // registry: scan the shell cwd's project agent dir instead, so project md
+  // roles stay visible (matches the previous refreshAgentMdRoles(cwd) path).
+  if (workspacePaths.length === 0) {
+    const shell = (ctx as { get?: (name: string) => { cwd?: string } | undefined }).get?.('shell')
+    if (typeof shell?.cwd === 'string' && shell.cwd !== '') {
+      workspacePaths.push(shell.cwd)
     }
   }
 
