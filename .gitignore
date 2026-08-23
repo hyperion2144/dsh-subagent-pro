@@ -8,11 +8,8 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Build output (lib/ is shipped, but allow fresh build on each commit)
-# Keep lib/ in VCS so the standalone repo works without a build step,
-# matching @leetoners/dsh-ui-subagent-monitor's release-copy convention.
-# If you prefer fresh-build-only, uncomment the next line:
-# lib/
+# Build output — NOT in VCS (prepare hook builds on install; T2 decision 2026-08-23)
+lib/
 
 # tsbuildinfo
 *.tsbuildinfo

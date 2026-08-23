@@ -1,0 +1,8 @@
+# pnpm 11 settings live here (the `pnpm` field in package.json is no longer
+# read). esbuild's postinstall must be ALLOWED: tsx/tsdown depend on it, and
+# github:/git-hosted installs prep the package in a temp dir where a banned
+# esbuild build aborts the whole install (ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED
+# / ERR_PNPM_PREPARE_PACKAGE). lib/ is not in VCS, so the prepare hook builds
+# it on install (T2 decision 2026-08-23).
+allowBuilds:
+  esbuild: true
