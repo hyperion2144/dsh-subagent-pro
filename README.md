@@ -2,9 +2,18 @@
 
 > DeepSeek Harness Web 扩展插件：实时子代理监控 + 角色路由委派 + Claude Code 风格 `.dsh/agents/*.md` 角色注入。
 
-[English](#english) · [特性](#特性) · [安装](#安装) · [使用](#使用) · [角色定义](#角色定义) · [架构](#架构) · [开发](#开发) · [FAQ](#faq)
+[English](#english) · [特性](#特性) · [致谢](#致谢) · [安装](#安装) · [使用](#使用) · [角色定义](#角色定义) · [架构](#架构) · [开发](#开发) · [FAQ](#faq)
 
 ---
+
+## 致谢
+
+本插件在建造型上深度借鉴了以下两个开源项目，特此致谢：
+
+- **[dsh-subagent-monitor](https://github.com/Mombrane/dsh-subagent-monitor)（`@leetoners/dsh-ui-subagent-monitor` v0.2.0）** — 实时子代理监控面板：事件归因、浮层面板（拖动 / 调高 / 收起 / 隐藏行 / 状态点）、`conversation.input.left` HUD 图标、`shell.overlay` 面板挂载方式均源自该项目。
+- **[dsh-plugin-subagent-director](https://github.com/SeverusZh/dsh-plugin-subagent-director)（v0.2.1）** — 角色路由委派：`subagent_role` 四层回退（call > role > default > inherit）、默认模型兜底（seam 包装 `subagent/start`）、settings 命名空间与角色 CRUD、系统提示词角色清单，均源自该项目。
+
+没有这两个项目的先行工作，就不会有本插件。感谢原作者们的设计与实现。
 
 ## 特性
 
@@ -148,13 +157,13 @@ pnpm verify:docs
 
 ## FAQ
 
-**与旧 `dsh-subagent-monitor` 有什么区别？**
+**与旧 [`dsh-subagent-monitor`](https://github.com/Mombrane/dsh-subagent-monitor) 有什么区别？**
 
 - 触发开关从 sidebar 文字按钮改为 HUD 风格 `conversation.input.left` 图标按钮，与官方交互色板一致；
 - 数据路由从 `/api/subagent-monitor/snapshot` 改为 `/api/dsh-subagent-pro/snapshot`（如需兼容旧监控脚本请同步更新）；
 - 旧插件无 agent-md 与角色路由能力，本插件合并了三者。
 
-**与旧 `dsh-plugin-subagent-director` 有什么区别？**
+**与旧 [`dsh-plugin-subagent-director`](https://github.com/SeverusZh/dsh-plugin-subagent-director) 有什么区别？**
 
 - 单 bundle entry，无需手写 `cordis.patch.yml`（旧插件拆 main + bridge 两个条目绕开 webServer 注入限制，本插件 host 半是单进程直接 `inject: webServer`）；
 - 角色来源从仅 settings 扩展为 settings + agent md（project > global 优先级）；

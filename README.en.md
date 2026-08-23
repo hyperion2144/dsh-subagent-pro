@@ -2,9 +2,18 @@
 
 > DeepSeek Harness Web extension: live subagent monitor + role-based subagent routing + Claude Code style `.dsh/agents/*.md` persona injection.
 
-[中文](#中文) · [Features](#features) · [Install](#install) · [Usage](#usage) · [Roles](#roles) · [Architecture](#architecture) · [Development](#development) · [FAQ](#faq)
+[中文](#中文) · [Features](#features) · [Credits](#credits) · [Install](#install) · [Usage](#usage) · [Roles](#roles) · [Architecture](#architecture) · [Development](#development) · [FAQ](#faq)
 
 ---
+
+## Credits
+
+This plugin is deeply indebted to two open-source projects:
+
+- **[dsh-subagent-monitor](https://github.com/Mombrane/dsh-subagent-monitor) (`@leetoners/dsh-ui-subagent-monitor` v0.2.0)** — the live subagent monitor panel: event attribution, the floating panel (drag / resize / collapse / hide rows / status dots), the `conversation.input.left` HUD icon button, and the `shell.overlay` mounting approach all originate from this project.
+- **[dsh-plugin-subagent-director](https://github.com/SeverusZh/dsh-plugin-subagent-director) (v0.2.1)** — role-based subagent routing: the `subagent_role` four-layer fallback (call > role > default > inherit), default-model seam wrapping `subagent/start`, the settings namespace with role CRUD, and the system-prompt role listing all originate from this project.
+
+Without their pioneering work, this plugin would not exist. Thanks to the original authors.
 
 ## Features
 
