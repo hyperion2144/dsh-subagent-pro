@@ -36,6 +36,8 @@ dsh plugin --profile <name> add dsh-subagent-pro
 
 本插件是单一 bundle entry（`dsh-subagent-pro`），自动挂载 host 半 + client 半，无需手写 `cordis.patch.yml`。
 
+> **lib/ 不在版本库中**（T2 决策 2026-08-23）：`prepare` 钩子在安装时自动构建。`github:` / npm / tgz 安装会自动构建；若用 `dsh plugin add link:./` 引用本地仓库，请先在本仓库执行 `pnpm build`（link 模式不会触发 prepare）。
+
 如需覆盖默认配置，按 id 覆盖主条目：
 
 ```yaml

@@ -103,6 +103,14 @@ director ARCH 6 的论证、unittests 19 个全过。
 - 缺服务容错：`llm` 不可用时返回空数组而不是抛错，符合「工具失败不应打断对话」的稳健性预期；
 - 输出 schema 用 `oneOf` 三分支（providers / models / reasoning），让模型在工具调用后能精确区分。
 
+### 2.11 为什么 lib/ 不进版本库（分发策略偏离 monitor）
+
+monitor 沿用 release-copy（lib/ 提交进 git，安装零构建）；本插件选择 **prepare-hook 分发**（T2 决策 2026-08-23，选项 2，见 [#3](https://github.com/hyperion2144/dsh-subagent-pro/issues/3)）：
+
+- **源码是唯一真相**：git 历史只含 src/，lib/ 由 `prepare`（`npm run build`）在安装时现场构建，避免"改了 src 忘 build、提交了过期 lib"的漂移问题；
+- **接受偏离的代价**：`dsh plugin add link:./` 引用本地仓库时**不触发 prepare**（实测确认），因此 link 模式必须先本地 `pnpm build`——已在 README 安装节明确提示；`github:` / npm / tgz 安装由 prepare 自动构建；
+- **配套**：`pnpm-workspace.yaml` 随仓库分发（`allowBuilds: esbuild: true`），保证 git 宿主依赖的内层安装能完成构建链（pnpm 11 的供应链门禁）。
+
 ## 3. 文件结构
 
 src/index.ts                  # host 半主入口（apply）

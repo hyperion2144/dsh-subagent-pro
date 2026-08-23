@@ -36,6 +36,8 @@ dsh plugin --profile <name> add dsh-subagent-pro
 
 The plugin is a single bundle entry (`dsh-subagent-pro`) that mounts both the host half and the client half; no manual `cordis.patch.yml` write required. To override defaults, patch the main entry by id:
 
+> **`lib/` is not in version control** (T2 decision 2026-08-23): the `prepare` hook builds it on install. `github:` / npm / tgz installs build automatically; if you use `dsh plugin add link:./` pointing at a local checkout, run `pnpm build` there first (link mode does not trigger `prepare`).
+
 ```yaml
 - id: dsh-subagent-pro
   name: dsh-subagent-pro
