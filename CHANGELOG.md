@@ -26,6 +26,10 @@ All notable changes to `dsh-subagent-pro` are recorded here. Format follows Keep
 - **Default subagent model now actually applies.** The plugin previously subscribed to a non-existent `settings/change` event and cached the initial `describe()` snapshot, so the `applyDefaultRouteSeam` never saw user-edited `subagent-pro.defaultProvider` / `defaultModel` after startup — subagents silently fell back to `agent-default-model`. Rewired to use `installSettingsSection`'s `setSource` hook (the dsh-agent-default-model pattern): the snapshot getter now re-invokes the live source on every read, so settings.yaml hot reload + UI writes both flow through immediately. `src/index.ts` reload listener switched from the bogus `settings/change` to the real `settings/updated` event. New test `settings-snapshot.test.ts` locks down the live-source contract.
 - **Model lookup for historical subagents** — `enrich()` queried models only from the in-memory `runs` map (empty after a host restart); now it iterates the durable descendant catalog ids and cold-reads each session's `request/header` events from persistence.
 
+### Changed
+
+- **子代理面板默认关闭** — the floating panel no longer auto-opens on desktop page load; it starts collapsed and opens only via the HUD toggle button. The running-count badge on the toggle still shows activity while the panel stays closed. Removed the `autoOpenIfDesktop()` mount hook from the client store.
+
 ## [0.1.0] - 2026-08-20
 
 ### Added (首发合并版本)

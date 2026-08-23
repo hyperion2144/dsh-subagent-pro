@@ -63,7 +63,6 @@ let state: StoreState = {
   hidden: [],
   lastError: undefined,
 }
-let autoOpened = false
 let polling = false
 
 const commit = (patch: Partial<StoreState>): void => {
@@ -125,13 +124,6 @@ let pollDisposer: (() => void) | undefined
 export function stopPolling(): void {
   if (pollDisposer !== undefined) pollDisposer()
   pollDisposer = undefined
-}
-
-/** Open the panel automatically on first mount (desktop only). */
-export function autoOpenIfDesktop(): void {
-  if (autoOpened) return
-  autoOpened = true
-  if (!window.matchMedia('(max-width: 768px)').matches) commit({ open: true })
 }
 
 // ---- services injected from host runtime ----

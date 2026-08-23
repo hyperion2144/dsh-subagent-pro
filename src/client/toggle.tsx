@@ -10,7 +10,7 @@
 import { useEffect, type ReactElement } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 
-import { autoOpenIfDesktop, dispatch, ensurePolling, useStore } from './store'
+import { dispatch, ensurePolling, useStore } from './store'
 
 type ToggleProps = PropsRuntime<'root'>
 
@@ -52,7 +52,6 @@ export function Toggle(props: ToggleProps): ReactElement {
       dispatch({ sessionId: current })
     }
     ensurePolling(current)
-    autoOpenIfDesktop()
   }, [current])
 
   const running = store.rows.filter((row) => row.status === 'running').length
